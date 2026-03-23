@@ -63,6 +63,10 @@ python main.py device       # print GPU profile and recommended settings
 ottosplatto/
 ├── main.py                 # Entry point (CLI + TUI dispatch)
 ├── run.sh                  # Launcher (auto-installs deps)
+├── CLAUDE.md               # Claude Code project instructions
+├── .claude/
+│   └── commands/
+│       └── setup-and-test.md   # /setup-and-test slash command
 ├── pipeline/
 │   ├── device.py           # GPU/arch detection and adaptive defaults
 │   ├── extract.py          # FFmpeg frame extraction
@@ -81,6 +85,36 @@ ottosplatto/
 | RTX 3090 (24 GB) | x86_64 | Ampere, sm_8.6 | 30K iters, SH 3 |
 | DGX Spark (128 GB) | aarch64 | Blackwell, sm_10.x | 30K iters, SH 4 |
 | Low-VRAM (<20 GB) | any | auto | 20K iters, SH 2 |
+
+## Development with Claude Code
+
+This repo includes built-in [Claude Code](https://docs.anthropic.com/en/docs/claude-code) support for development and testing.
+
+### CLAUDE.md
+
+Loaded automatically when Claude Code opens this repo. Contains project architecture, conventions, known limitations, and system dependency information. Claude Code uses this to understand the codebase without re-exploration each session.
+
+### /setup-and-test
+
+A slash command that bootstraps and validates OttoSplatto on any new machine. Run it in Claude Code after cloning:
+
+```
+/setup-and-test
+```
+
+It performs a 9-step validation:
+
+1. **Check system deps** — ffmpeg, colmap, nvidia-smi, conda
+2. **Install Python deps** — textual, rich
+3. **Verify imports** — all pipeline modules and TUI
+4. **Check conda env** — gs_original with PyTorch + CUDA + OpenCV
+5. **Generate test data** — synthetic 3D scene (textured room, 20 cameras on a circle)
+6. **Run full pipeline** — create → extract → COLMAP reconstruct → 3DGS train
+7. **Test viewer** — HTTP server + Three.js PLY rendering
+8. **Test TUI** — headless widget rendering
+9. **Report results** — pass/fail summary table per component
+
+This is the primary way to verify the application works end-to-end on a new device.
 
 ## COLMAP Notes
 
