@@ -165,6 +165,8 @@ def train(
         "--iterations", str(iterations),
         "--sh_degree", str(sh_degree),
         "--save_iterations", *[str(s) for s in save_iterations],
+        "--ip", "127.0.0.1",
+        "--port", "0",  # disable GUI server to avoid port conflicts
     ]
 
     if on_output:

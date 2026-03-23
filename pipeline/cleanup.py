@@ -87,7 +87,7 @@ def cleanup_splat(
     iopacity = pidx("opacity")
     iscale0, iscale1, iscale2 = pidx("scale_0"), pidx("scale_1"), pidx("scale_2")
 
-    if any(i < 0 for i in (ix, iy, iz, iopacity, iscale0, iscale1, iscale2)):
+    if any(i < 0 for i in (ix, iy, iz, iopacity, iscale0)):
         return {"status": "error", "message": "Missing required properties (x/y/z/opacity/scale)"}
 
     # ── Compute derived values ────────────────────────────────
@@ -95,7 +95,9 @@ def cleanup_splat(
     opacity_raw = vertices[:, iopacity]
     opacity = _sigmoid(opacity_raw)
 
-    scale_raw = vertices[:, [iscale0, iscale1, iscale2]]
+    # Support both 3DGS (3 scales) and 2DGS (2 scales)
+    scale_indices = [i for i in (iscale0, iscale1, iscale2) if i >= 0]
+    scale_raw = vertices[:, scale_indices]
     scale = np.exp(scale_raw)
 
     max_scale = np.max(scale, axis=1)
