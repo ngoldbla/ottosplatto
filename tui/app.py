@@ -262,10 +262,28 @@ class OttoSplattoApp(App):
             with TabPane("Train", id="tab-train"):
                 yield Label("Iterations", classes="form-label")
                 yield Input(value="30000", id="iterations", classes="form-input")
+                yield Static(
+                    "How many optimization steps to run. More = better quality but slower.\n"
+                    "7000 — Quick preview (~2 min on RTX 4090)\n"
+                    "30000 — Good quality (~8 min on RTX 4090, recommended)\n"
+                    "50000+ — Diminishing returns, use for final output only",
+                    classes="help-text",
+                )
                 yield Label("SH Degree", classes="form-label")
                 yield Input(value="3", id="sh-degree", classes="form-input")
+                yield Static(
+                    "Spherical Harmonics degree controls color fidelity.\n"
+                    "0 — Flat color per splat (fastest, lowest quality)\n"
+                    "3 — Full view-dependent color (recommended for most scenes)",
+                    classes="help-text",
+                )
                 yield Label("Conda Environment", classes="form-label")
                 yield Input(value="gs_original", id="conda-env", classes="form-input")
+                yield Static(
+                    "The conda environment with the original 3DGS training code installed.\n"
+                    "Leave as 'gs_original' unless you have a custom setup.",
+                    classes="help-text",
+                )
                 yield Button("Start Training", variant="primary", id="btn-train")
 
             # --- Tab 5: View ---
@@ -321,17 +339,19 @@ class OttoSplattoApp(App):
 
     def _switch_tab(self, tab_id: str) -> None:
         """Switch to a tab by ID. Safe to call from worker threads."""
-        def _do_switch():
-            try:
-                tc = self.query_one(TabbedContent)
-                tc.active = tab_id
-            except Exception as e:
-                self._log(f"[yellow]Tab switch failed: {e}[/]")
         try:
-            self.app.call_from_thread(_do_switch)
+            # Use run_worker with thread=False to schedule on the main thread
+            self.call_later(self._apply_tab_switch, tab_id)
         except Exception:
-            # Fallback: might already be on main thread
-            _do_switch()
+            pass
+
+    def _apply_tab_switch(self, tab_id: str) -> None:
+        """Actually switch the tab — must run on the main thread."""
+        try:
+            tc = self.query_one(TabbedContent)
+            tc.active = tab_id
+        except Exception as e:
+            self._log(f"[yellow]Tab switch issue: {e}[/]")
 
     def _load_config(self) -> dict:
         cfg_path = os.path.join(self.project_dir, "project.json")
