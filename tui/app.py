@@ -192,6 +192,15 @@ class OttoSplattoApp(App):
         with TabbedContent():
             # --- Tab 1: Project ---
             with TabPane("Project", id="tab-project"):
+                yield Static(
+                    "Capture Tips for Best Results:\n"
+                    "  Lock exposure before recording (tap & hold for AE/AF Lock)\n"
+                    "  Use main 1x lens — avoid ultra-wide or telephoto\n"
+                    "  Move slowly in a spiral pattern at multiple heights\n"
+                    "  70-80% overlap between frames\n"
+                    "  Minimum: 50 photos (small), 100+ (room), 200+ (building)",
+                    classes="help-text",
+                )
                 yield Label("Project Name", classes="form-label")
                 yield Input(placeholder="my_scene", id="project-name", classes="form-input")
                 yield Label("Input (video file or image directory)", classes="form-label")
@@ -535,6 +544,9 @@ class OttoSplattoApp(App):
                 self.app.call_later(
                     lambda v=matcher_val: setattr(self.query_one("#matcher", Select), "value", v)
                 )
+                # Save single_camera detection to project config
+                self._config["single_camera"] = detection.get("single_camera", False)
+                self._save_config()
 
             self._switch_tab("tab-reconstruct")
 
@@ -741,10 +753,18 @@ class OttoSplattoApp(App):
             return
 
         # Pre-check image quality before COLMAP
-        from pipeline.precheck import precheck_images
-        check = precheck_images(os.path.join(self.project_dir, "images"), on_output=self._log)
+        from pipeline.precheck import precheck_images, cull_blurry_frames
+        images_dir = os.path.join(self.project_dir, "images")
+        check = precheck_images(images_dir, on_output=self._log)
         if check.get("score") == "POOR":
             self._log("[yellow]⚠ Image quality is POOR — reconstruction may fail. Consider adding more images or removing blurry ones.[/]")
+
+        # Auto-cull blurry frames if any were detected
+        if check.get("blur_scores") and any("very blurry" in i for i in check.get("issues", [])):
+            self._log("[cyan]Auto-culling blurry frames…[/]")
+            cull_result = cull_blurry_frames(images_dir, on_output=self._log)
+            if cull_result["culled"] > 0:
+                self._log(f"[green]✓ Moved {cull_result['culled']} blurry frames to culled/[/]")
 
         from pipeline.reconstruct import run_colmap
 
@@ -753,11 +773,14 @@ class OttoSplattoApp(App):
         use_gpu = self.query_one("#use-gpu", Switch).value
         undistort = self.query_one("#undistort", Switch).value
 
-        self._log(f"Running COLMAP ({camera_model}, {matcher}, gpu={use_gpu})…")
+        # Check if EXIF detection found a single camera (shared intrinsics)
+        self._load_config()
+        single_camera = self._config.get("single_camera", False)
+
+        self._log(f"Running COLMAP ({camera_model}, {matcher}, gpu={use_gpu}, single_camera={single_camera})…")
 
         # Auto-convert HEIC to JPEG before COLMAP
         from pipeline.convert import convert_heic_to_jpeg
-        images_dir = os.path.join(self.project_dir, "images")
         conv = convert_heic_to_jpeg(images_dir, on_output=self._log)
         if conv.get("converted", 0) > 0:
             self._log(f"[green]✓ Converted {conv['converted']} HEIC files to JPEG[/]")
@@ -766,6 +789,7 @@ class OttoSplattoApp(App):
             self.project_dir,
             camera_model=camera_model, use_gpu=use_gpu,
             matcher=matcher, undistort=undistort,
+            single_camera=single_camera,
             on_output=self._log, check_cancel=self._check_cancel,
         )
 

@@ -25,7 +25,7 @@ def extract_frames(
         "ffmpeg", "-y",
         "-i", video_path,
         "-vf", ",".join(vf_filters),
-        "-q:v", "1",
+        "-qscale:v", "1", "-qmin", "1",
         os.path.join(images_dir, "%04d.jpg"),
     ]
 

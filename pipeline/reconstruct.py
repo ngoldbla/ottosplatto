@@ -77,6 +77,9 @@ def run_colmap(
     use_gpu: bool = True,
     matcher: str = "exhaustive",
     undistort: bool = True,
+    single_camera: bool = False,
+    max_image_size: int = 3200,
+    max_num_features: int = 8192,
     on_output: Optional[Callable[[str], None]] = None,
     check_cancel: Optional[Callable[[], bool]] = None,
 ) -> dict:
@@ -117,15 +120,22 @@ def run_colmap(
     if on_output:
         on_output(f"━━━ Step 1/4: Feature Extraction ({num_images} images) ━━━")
         on_output("  Finding keypoints in each image...")
+    if single_camera and on_output:
+        on_output("  Single camera mode — sharing intrinsics across all images")
 
     t0 = time.monotonic()
-    rc = _run_cmd([
+    extract_cmd = [
         "colmap", "feature_extractor",
         "--database_path", database_path,
         "--image_path", images_dir,
         "--ImageReader.camera_model", camera_model,
         f"--{extract_gpu}", gpu_val,
-    ], on_output, check_cancel, "extract")
+        "--SiftExtraction.max_image_size", str(max_image_size),
+        "--SiftExtraction.max_num_features", str(max_num_features),
+    ]
+    if single_camera:
+        extract_cmd.extend(["--ImageReader.single_camera", "1"])
+    rc = _run_cmd(extract_cmd, on_output, check_cancel, "extract")
 
     if rc != 0:
         return {"status": "error", "step": "feature_extraction", "returncode": rc}

@@ -80,9 +80,11 @@ def precheck_images(
         issues.append(f"⚠ Only {exif_pct:.0f}% of images have EXIF data — COLMAP will estimate camera intrinsics (slower, less accurate)")
 
     # Blur detection
+    blur_threshold = None
     if blur_scores:
         blur_arr = np.array(blur_scores)
         threshold = np.percentile(blur_arr, 10)  # bottom 10%
+        blur_threshold = float(threshold)
         blurry_count = (blur_arr < threshold).sum()
         very_blurry = (blur_arr < threshold * 0.3).sum()
         if very_blurry > 0:
@@ -111,4 +113,71 @@ def precheck_images(
         "exif_pct": exif_pct,
         "issues": issues,
         "blur_scores": blur_scores,
+        "blur_threshold": blur_threshold,
     }
+
+
+def cull_blurry_frames(
+    images_dir: str,
+    threshold_percentile: int = 10,
+    on_output: Optional[Callable[[str], None]] = None,
+) -> dict:
+    """Remove the bottom N% of images by blur score (Laplacian variance).
+
+    Blurry frames are moved to images_dir/../culled/ (not deleted).
+    """
+    image_files = sorted([
+        f for f in os.listdir(images_dir)
+        if f.lower().endswith((".jpg", ".jpeg", ".png"))
+    ])
+
+    if not image_files:
+        return {"culled": 0, "kept": 0, "threshold": 0.0}
+
+    # Compute blur scores for all images
+    scores = {}
+    for fname in image_files:
+        path = os.path.join(images_dir, fname)
+        try:
+            img = Image.open(path)
+            gray = np.array(img.convert("L"), dtype=np.float64)
+            h, w = gray.shape
+            if h > 100 and w > 100:
+                ch, cw = h // 2, w // 2
+                crop = gray[ch-50:ch+50, cw-50:cw+50]
+                kernel = np.array([[0, 1, 0], [1, -4, 1], [0, 1, 0]], dtype=np.float64)
+                lap = np.zeros_like(crop)
+                for dy in range(-1, 2):
+                    for dx in range(-1, 2):
+                        lap += kernel[dy+1, dx+1] * np.roll(np.roll(crop, dy, 0), dx, 1)
+                scores[fname] = lap.var()
+            else:
+                scores[fname] = 0.0
+            img.close()
+        except Exception:
+            scores[fname] = 0.0
+
+    if not scores:
+        return {"culled": 0, "kept": 0, "threshold": 0.0}
+
+    all_scores = np.array(list(scores.values()))
+    threshold = float(np.percentile(all_scores, threshold_percentile))
+
+    culled_dir = os.path.join(os.path.dirname(images_dir.rstrip("/")), "culled")
+    os.makedirs(culled_dir, exist_ok=True)
+
+    culled = 0
+    for fname, score in scores.items():
+        if score < threshold:
+            src = os.path.join(images_dir, fname)
+            dst = os.path.join(culled_dir, fname)
+            os.rename(src, dst)
+            culled += 1
+            if on_output:
+                on_output(f"  Culled {fname} (blur score: {score:.1f} < {threshold:.1f})")
+
+    kept = len(scores) - culled
+    if on_output:
+        on_output(f"  Culled {culled} blurry frames, kept {kept} (threshold: {threshold:.1f})")
+
+    return {"culled": culled, "kept": kept, "threshold": threshold}

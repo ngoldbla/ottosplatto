@@ -7,17 +7,17 @@ from typing import Optional, Callable
 
 # Camera model recommendations based on device
 CAMERA_PROFILES = {
-    "iphone": {"camera_model": "SIMPLE_RADIAL", "reason": "iPhone — standard lens with mild radial distortion"},
-    "pixel": {"camera_model": "SIMPLE_RADIAL", "reason": "Pixel — standard lens with mild radial distortion"},
-    "samsung": {"camera_model": "SIMPLE_RADIAL", "reason": "Samsung — standard lens with mild radial distortion"},
+    "iphone": {"camera_model": "OPENCV", "reason": "iPhone — OPENCV handles lens distortion better with shared intrinsics"},
+    "pixel": {"camera_model": "OPENCV", "reason": "Pixel — OPENCV handles lens distortion better with shared intrinsics"},
+    "samsung": {"camera_model": "OPENCV", "reason": "Samsung — OPENCV handles lens distortion better with shared intrinsics"},
     "gopro": {"camera_model": "OPENCV", "reason": "GoPro — wide-angle lens with significant distortion"},
     "hero": {"camera_model": "OPENCV", "reason": "GoPro Hero — wide-angle lens with significant distortion"},
     "insta360": {"camera_model": "OPENCV_FISHEYE", "reason": "Insta360 — fisheye lens"},
-    "dji": {"camera_model": "SIMPLE_RADIAL", "reason": "DJI drone — calibrated lens with mild distortion"},
-    "mavic": {"camera_model": "SIMPLE_RADIAL", "reason": "DJI Mavic — calibrated lens"},
-    "phantom": {"camera_model": "SIMPLE_RADIAL", "reason": "DJI Phantom — calibrated lens"},
-    "air": {"camera_model": "SIMPLE_RADIAL", "reason": "DJI Air — calibrated lens"},
-    "mini": {"camera_model": "SIMPLE_RADIAL", "reason": "DJI Mini — calibrated lens"},
+    "dji": {"camera_model": "OPENCV", "reason": "DJI drone — OPENCV with shared intrinsics for consistent lens"},
+    "mavic": {"camera_model": "OPENCV", "reason": "DJI Mavic — OPENCV with shared intrinsics for consistent lens"},
+    "phantom": {"camera_model": "OPENCV", "reason": "DJI Phantom — OPENCV with shared intrinsics for consistent lens"},
+    "air": {"camera_model": "OPENCV", "reason": "DJI Air — OPENCV with shared intrinsics for consistent lens"},
+    "mini": {"camera_model": "OPENCV", "reason": "DJI Mini — OPENCV with shared intrinsics for consistent lens"},
     "canon": {"camera_model": "PINHOLE", "reason": "Canon DSLR/mirrorless — calibrated lens, minimal distortion"},
     "nikon": {"camera_model": "PINHOLE", "reason": "Nikon DSLR/mirrorless — calibrated lens"},
     "sony": {"camera_model": "PINHOLE", "reason": "Sony mirrorless — calibrated lens"},
@@ -72,6 +72,13 @@ def detect_camera(images_dir: str, on_output: Optional[Callable[[str], None]] = 
             reason = profile["reason"]
             break
 
+    # Determine if all sampled images are from the same device (same Make+Model = shared intrinsics)
+    make_model_pairs = set()
+    for i in range(len(makes)):
+        m = models[i] if i < len(models) else ""
+        make_model_pairs.add((makes[i], m))
+    single_camera = len(make_model_pairs) == 1 and len(makes) > 0
+
     # Determine matcher: sequential if filenames suggest video frames or ordered capture
     matcher = "sequential" if has_sequence else "exhaustive"
     matcher_reason = (
@@ -90,6 +97,7 @@ def detect_camera(images_dir: str, on_output: Optional[Callable[[str], None]] = 
         "model": models[0] if models else None,
         "focal_length": focal_lengths[0] if focal_lengths else None,
         "num_images": len(image_files),
+        "single_camera": single_camera,
     }
 
     if on_output:
@@ -98,6 +106,8 @@ def detect_camera(images_dir: str, on_output: Optional[Callable[[str], None]] = 
         on_output(f"  Matcher: {matcher} — {matcher_reason}")
         if focal_lengths:
             on_output(f"  Focal length: {focal_lengths[0]:.1f}mm")
+        if single_camera:
+            on_output(f"  Single camera detected — shared intrinsics enabled")
         on_output(f"  Images: {len(image_files)}")
 
     return result
