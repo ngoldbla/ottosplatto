@@ -1,6 +1,6 @@
 # OttoSplatto
 
-Gaussian Splatting pipeline for Linux + NVIDIA GPUs. A Linux-native analog of [CorbeauSplat](https://github.com/freddewitt/CorbeauSplat) (macOS), orchestrating the full workflow from video to trained 3D Gaussian Splats.
+Gaussian Splatting pipeline for Linux + NVIDIA GPUs. Orchestrates the full workflow from video to trained 3D Gaussian Splats.
 
 Supports RTX consumer GPUs (4090, 3090, …), DGX Spark (Grace Blackwell), and multi-GPU workstations. Auto-detects hardware and adapts training defaults.
 
@@ -87,7 +87,3 @@ ottosplatto/
 - COLMAP 4.x renamed `SiftExtraction.use_gpu` → `FeatureExtraction.use_gpu` — OttoSplatto detects the version and uses the correct flags.
 - Textureless scenes (e.g., empty interiors with smooth walls) will fail COLMAP reconstruction. Use COLMAP-free methods like [G3Splat](https://github.com/SZU-AdvTech-2023/174-G3Splat) or [VicaSplat](https://github.com/Vicassa/VicaSplat) for those scenes.
 - For video input, **sequential matcher** is faster. For unordered photos, use **exhaustive**.
-
-## License
-
-MIT
