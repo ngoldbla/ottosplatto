@@ -21,6 +21,65 @@ from textual import work
 from rich.text import Text
 
 
+class QRCodeScreen(ModalScreen[None]):
+    """Full-screen modal showing a QR code for phone upload."""
+
+    CSS = """
+    QRCodeScreen {
+        align: center middle;
+    }
+    #qr-dialog {
+        width: 60;
+        height: auto;
+        max-height: 90%;
+        border: thick $success;
+        background: $surface;
+        padding: 1 2;
+    }
+    #qr-title {
+        text-align: center;
+        text-style: bold;
+        color: $success;
+        margin-bottom: 1;
+    }
+    #qr-url {
+        text-align: center;
+        color: $text;
+        text-style: bold;
+        margin-bottom: 1;
+    }
+    #qr-code {
+        text-align: center;
+        margin-bottom: 1;
+    }
+    #qr-hint {
+        text-align: center;
+        color: $text-muted;
+        margin-bottom: 1;
+    }
+    #qr-dismiss {
+        width: 100%;
+    }
+    """
+
+    def __init__(self, url: str, qr_text: str):
+        super().__init__()
+        self._url = url
+        self._qr_text = qr_text
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="qr-dialog"):
+            yield Static("Upload from Phone", id="qr-title")
+            yield Static(self._url, id="qr-url")
+            yield Static(self._qr_text, id="qr-code")
+            yield Static("Scan this QR code or open the URL on your phone", id="qr-hint")
+            yield Button("Got it — start uploading", variant="success", id="qr-dismiss")
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "qr-dismiss":
+            self.dismiss(None)
+
+
 class PathPickerScreen(ModalScreen[str]):
     """Modal directory/file picker."""
 
@@ -620,15 +679,13 @@ class OttoSplattoApp(App):
         qr.print_ascii(out=buf, invert=True)
         qr_text = buf.getvalue()
 
-        self._log("")
         self._log(f"[bold green]Upload URL:[/] {url}")
-        self._log("")
-        log_widget = self.query_one("#log", RichLog)
-        for line in qr_text.splitlines():
-            log_widget.write(Text(line))
-        self._log("")
-        self._log("Open this URL on your phone to upload photos")
-        self._log("")
+        self._log("Scan the QR code or open the URL on your phone")
+
+        # Show QR as a full-screen modal so it's readable
+        self.app.call_from_thread(
+            lambda: self.push_screen(QRCodeScreen(url, qr_text))
+        )
 
         # Swap buttons: hide Upload, show Done Uploading
         self._upload_done = False
