@@ -5,7 +5,7 @@ Prioritized improvements identified after MVP completion. Each item includes rat
 ## Tier 1: High Impact, Achievable Now
 
 ### 1. Splat Cleanup / Post-Processing ⭐ PRIORITY
-**Status:** Not started
+**Status:** ✅ Done (pipeline/cleanup.py)
 **Complexity:** Medium (~150 lines Python)
 
 Vanilla 3DGS produces three types of visual artifacts:
@@ -25,7 +25,7 @@ Vanilla 3DGS produces three types of visual artifacts:
 ---
 
 ### 2. WASD Camera Controls in Viewer ⭐ PRIORITY
-**Status:** Not started
+**Status:** ✅ Done (viewer.py — PointerLockControls + Tab toggle)
 **Complexity:** Low (~50 lines JS)
 
 Current OrbitControls only support mouse-based orbit/zoom/pan. Users expect FPS-style WASD+mouse traversal for walking through scenes.
@@ -37,7 +37,7 @@ Current OrbitControls only support mouse-based orbit/zoom/pan. Users expect FPS-
 ---
 
 ### 3. Export & Reproducibility Manifest ⭐ PRIORITY
-**Status:** Not started
+**Status:** ✅ Done (pipeline/manifest.py + viewer info panel)
 **Complexity:** Low (~80 lines Python + JS)
 
 After training, generate a `manifest.json` alongside the PLY capturing all pipeline settings and results. Enables reproducibility and provenance tracking.
@@ -57,7 +57,7 @@ After training, generate a `manifest.json` alongside the PLY capturing all pipel
 ## Tier 2: Significant Quality Improvements
 
 ### 4. Auto Camera Detection from EXIF
-**Status:** Not started
+**Status:** ✅ Done (pipeline/exif_detect.py — auto-fills Reconstruct tab)
 **Complexity:** Low (~60 lines Python)
 
 Read EXIF from input images to auto-select camera model:
@@ -71,7 +71,7 @@ Also extract focal length to pre-populate COLMAP intrinsics, improving reconstru
 ---
 
 ### 5. Image Quality Pre-Check
-**Status:** Not started
+**Status:** ✅ Done (pipeline/precheck.py — runs before COLMAP, reports readiness score)
 **Complexity:** Medium (~120 lines Python)
 
 Before COLMAP, scan input images and warn about:
@@ -86,7 +86,7 @@ Display results as a "readiness score" before reconstruction.
 ---
 
 ### 6. Better Training Methods (2DGS, Scaffold-GS)
-**Status:** Not started
+**Status:** ✅ 2DGS done (train.py method param + TUI selector, conda env gs_2dgs). Scaffold-GS not yet.
 **Complexity:** High (new conda envs + training wrappers)
 
 Vanilla 3DGS (2023) is outdated. Modern alternatives produce better quality:
@@ -102,7 +102,7 @@ Add a "Method" dropdown in the Train tab. Each method = separate conda env and t
 ## Tier 3: Polish & Professional Features
 
 ### 7. Training Loss Curves in TUI
-**Status:** Not started
+**Status:** ✅ Done (ASCII sparkline in log panel after training)
 **Complexity:** Low
 
 Use Textual's `Sparkline` widget to show loss over time in the log panel. Helps users see if training has converged or needs more iterations.

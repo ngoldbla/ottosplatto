@@ -13,6 +13,8 @@ pipeline/extract.py      FFmpeg frame extraction from video
 pipeline/reconstruct.py  COLMAP pipeline (feature extract → match → map → undistort)
 pipeline/train.py        Wraps original 3DGS train.py via conda
 pipeline/convert.py      HEIC/HEIF → JPEG conversion with EXIF preservation
+pipeline/exif_detect.py  Auto camera/matcher detection from EXIF metadata
+pipeline/precheck.py     Image quality pre-check before COLMAP
 pipeline/viewer.py       HTTP server + Spark.js gaussian splat viewer (with point cloud fallback)
 tui/app.py               Textual TUI (tabbed: Project → Extract → Reconstruct → Train → View)
 ```

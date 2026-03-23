@@ -260,6 +260,18 @@ class OttoSplattoApp(App):
 
             # --- Tab 4: Train ---
             with TabPane("Train", id="tab-train"):
+                yield Label("Training Method", classes="form-label")
+                yield Select[str](
+                    [("Original 3DGS (fast, good quality)", "original"),
+                     ("2D Gaussian Splatting (better surfaces, fewer artifacts)", "2dgs")],
+                    value="2dgs", id="train-method",
+                )
+                yield Static(
+                    "Original 3DGS — Fast training, good general quality. May produce floaters and needles.\n"
+                    "2D Gaussian Splatting — Better surface reconstruction, fewer artifacts. "
+                    "Recommended for emergency response scenes with structures and terrain.",
+                    classes="help-text",
+                )
                 yield Label("Iterations", classes="form-label")
                 yield Input(value="30000", id="iterations", classes="form-input")
                 yield Static(
@@ -510,6 +522,20 @@ class OttoSplattoApp(App):
                 f"[green]{num_images} images detected[/] — skipping frame extraction, "
                 f"advancing to reconstruction"
             )
+
+            # Auto-detect camera from EXIF and recommend settings
+            from pipeline.exif_detect import detect_camera
+            detection = detect_camera(os.path.join(self.project_dir, "images"), on_output=self._log)
+            if detection["status"] == "detected":
+                cam_model = detection["camera_model"]
+                matcher_val = detection["matcher"]
+                self.app.call_later(
+                    lambda v=cam_model: setattr(self.query_one("#camera-model", Select), "value", v)
+                )
+                self.app.call_later(
+                    lambda v=matcher_val: setattr(self.query_one("#matcher", Select), "value", v)
+                )
+
             self._switch_tab("tab-reconstruct")
 
     @work(thread=True)
@@ -714,6 +740,12 @@ class OttoSplattoApp(App):
             self._log("[red]Create or load a project first[/]")
             return
 
+        # Pre-check image quality before COLMAP
+        from pipeline.precheck import precheck_images
+        check = precheck_images(os.path.join(self.project_dir, "images"), on_output=self._log)
+        if check.get("score") == "POOR":
+            self._log("[yellow]⚠ Image quality is POOR — reconstruction may fail. Consider adding more images or removing blurry ones.[/]")
+
         from pipeline.reconstruct import run_colmap
 
         camera_model = self.query_one("#camera-model", Select).value
@@ -763,19 +795,34 @@ class OttoSplattoApp(App):
         output = os.path.join(self.project_dir, "output")
         iterations = int(self.query_one("#iterations", Input).value or "30000")
         sh_degree = int(self.query_one("#sh-degree", Input).value or "3")
-        conda_env = self.query_one("#conda-env", Input).value.strip() or "gs_original"
+        method = self.query_one("#train-method", Select).value
+        conda_env = "gs_2dgs" if method == "2dgs" else self.query_one("#conda-env", Input).value.strip() or "gs_original"
 
-        self._log(f"Training {iterations} iterations (SH {sh_degree}) in env '{conda_env}'…")
+        self._log(f"Training {iterations} iterations (SH {sh_degree}) method='{method}' env='{conda_env}'…")
 
         result = train(
             source_dir=source, output_dir=output,
             iterations=iterations, sh_degree=sh_degree,
-            conda_env=conda_env,
+            conda_env=conda_env, method=method,
             on_output=self._log, check_cancel=self._check_cancel,
         )
 
         if result["status"] == "success":
             self._ply_path = result.get("ply_path")
+
+            # Display loss curve
+            loss_history = result.get("loss_history", [])
+            if loss_history and len(loss_history) >= 2:
+                losses = [l for _, l in loss_history]
+                min_l, max_l = min(losses), max(losses)
+                if max_l > min_l:
+                    chars = "▁▂▃▄▅▆▇█"
+                    sparkline = ""
+                    for l in losses:
+                        idx = int((l - min_l) / (max_l - min_l) * (len(chars) - 1))
+                        sparkline += chars[idx]
+                    self._log(f"  Loss curve: {sparkline}")
+                    self._log(f"  Start: {losses[0]:.4f} → Final: {losses[-1]:.4f}")
 
             # ── Post-training: cleanup splat ──────────────────
             if self._ply_path and os.path.isfile(self._ply_path):

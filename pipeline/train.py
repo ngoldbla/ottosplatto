@@ -13,12 +13,26 @@ SEARCH_PATHS = [
     os.path.expanduser("~/.ottosplatto/gaussian-splatting"),
 ]
 
+SEARCH_PATHS_2DGS = [
+    os.path.expanduser("~/gaussian-splat-pipeline/methods/06_2dgs/repo"),
+    os.path.expanduser("~/2d-gaussian-splatting"),
+    os.path.expanduser("~/.ottosplatto/2d-gaussian-splatting"),
+]
+
 DEFAULT_CONDA_ENV = "gs_original"
 
 
 def find_trainer() -> Optional[str]:
     """Locate an existing 3DGS train.py on disk."""
     for path in SEARCH_PATHS:
+        if os.path.isfile(os.path.join(path, "train.py")):
+            return path
+    return None
+
+
+def find_trainer_2dgs() -> Optional[str]:
+    """Locate an existing 2DGS train.py on disk."""
+    for path in SEARCH_PATHS_2DGS:
         if os.path.isfile(os.path.join(path, "train.py")):
             return path
     return None
@@ -80,7 +94,7 @@ def _parse_training_line(line, total_iters, last_report_iter, report_every, t_st
             bar = "█" * filled + "░" * (bar_len - filled)
 
             msg = f"  [{bar}] {cur_iter}/{total_iters} ({pct:.0f}%){loss_str}{pts_str} — {eta_str}"
-            return {"msg": msg, "iter": cur_iter}
+            return {"msg": msg, "iter": cur_iter, "loss": float(loss_m.group(1)) if loss_m else None}
 
     # Catch saving checkpoints
     if re.search(r"saving.*iteration|point_cloud.*saved", line, re.IGNORECASE):
@@ -102,14 +116,25 @@ def train(
     sh_degree: int = 3,
     save_iterations: Optional[list] = None,
     conda_env: str = DEFAULT_CONDA_ENV,
+    method: str = "original",
     trainer_path: Optional[str] = None,
     env_override: Optional[dict] = None,
     on_output: Optional[Callable[[str], None]] = None,
     check_cancel: Optional[Callable[[], bool]] = None,
 ) -> dict:
-    """Run Gaussian Splatting training via the original 3DGS train.py."""
-    if trainer_path is None:
-        trainer_path = find_trainer()
+    """Run Gaussian Splatting training via the original 3DGS or 2DGS train.py."""
+    if method == "2dgs":
+        if on_output:
+            on_output("Using 2D Gaussian Splatting (better surfaces, fewer artifacts)")
+        if conda_env == DEFAULT_CONDA_ENV:
+            conda_env = "gs_2dgs"
+        if trainer_path is None:
+            trainer_path = find_trainer_2dgs()
+        if trainer_path is None:
+            return {"status": "error", "message": "Could not find 2DGS trainer. Expected at: " + SEARCH_PATHS_2DGS[0]}
+    else:
+        if trainer_path is None:
+            trainer_path = find_trainer()
 
     if trainer_path is None:
         if on_output:
@@ -159,6 +184,7 @@ def train(
     t_start = time.monotonic()
     last_report_iter = 0
     report_every = max(500, iterations // 20)  # ~20 progress updates
+    loss_history = []
 
     for line in iter(process.stdout.readline, ""):
         if check_cancel and check_cancel():
@@ -178,6 +204,8 @@ def train(
             if on_output:
                 on_output(progress["msg"])
             last_report_iter = progress.get("iter", last_report_iter)
+            if progress.get("loss") is not None:
+                loss_history.append((progress["iter"], progress["loss"]))
         elif on_output and ("error" in s.lower() or "warning" in s.lower() or "saving" in s.lower()):
             on_output(f"  {s}")
 
@@ -207,4 +235,5 @@ def train(
         "status": "success",
         "ply_path": final_ply,
         "output_dir": output_dir,
+        "loss_history": loss_history,
     }
