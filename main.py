@@ -160,7 +160,7 @@ def cmd_train(args):
 def cmd_view(args):
     from pipeline.viewer import launch_viewer
 
-    result = launch_viewer(args.ply, port=args.port, on_output=_log)
+    result = launch_viewer(args.ply, port=args.port, open_browser=not args.no_browser, on_output=_log)
     if result["status"] != "success":
         _log(f"ERROR: {result}")
         sys.exit(1)
@@ -276,6 +276,7 @@ def main():
     p = sub.add_parser("view", help="Launch PLY viewer")
     p.add_argument("--ply", required=True)
     p.add_argument("--port", type=int, default=8765)
+    p.add_argument("--no-browser", action="store_true", help="Don't auto-open browser")
 
     # run (full pipeline)
     p = sub.add_parser("run", help="Run full pipeline (create→extract→reconstruct→train)")

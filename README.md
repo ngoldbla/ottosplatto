@@ -72,7 +72,7 @@ ottosplatto/
 │   ├── extract.py          # FFmpeg frame extraction
 │   ├── reconstruct.py      # COLMAP sparse reconstruction
 │   ├── train.py            # 3DGS training wrapper
-│   └── viewer.py           # Web-based PLY point cloud viewer
+│   └── viewer.py           # Web-based Spark.js gaussian splat viewer
 ├── tui/
 │   └── app.py              # Textual TUI application
 └── tests/
@@ -135,6 +135,28 @@ It performs a 9-step validation:
 9. **Report results** — pass/fail summary table per component
 
 This is the primary way to verify the application works end-to-end on a new device.
+
+## Viewer
+
+The built-in viewer renders gaussian splats in-browser using [Spark.js](https://sparkjs.dev/) + Three.js. It requires a browser with **WebGL2** and GPU acceleration.
+
+### Wayland + NVIDIA
+
+Chrome/Chromium on Wayland with NVIDIA drivers has a known issue where the GPU process crashes, disabling WebGL entirely. The viewer auto-detects this and launches Chrome with X11 fallback. If you open the URL manually, launch Chrome with:
+
+```bash
+chromium-browser --ozone-platform=x11 http://127.0.0.1:8765/?ply=FILE.ply
+```
+
+Or add `--no-browser` to skip auto-open and use your own browser:
+
+```bash
+python main.py view --ply path/to/point_cloud.ply --no-browser
+```
+
+### Fallback
+
+If WebGL is completely unavailable (e.g. SSH/headless), the viewer falls back to a Three.js point cloud renderer that shows splat positions with SH DC colors.
 
 ## COLMAP Notes
 

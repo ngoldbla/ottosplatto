@@ -1,16 +1,84 @@
 """OttoSplatto TUI — Textual-based terminal interface for Gaussian Splatting."""
+import io
 import os
 import json
+import socket
+import subprocess
 import sys
+import shutil
+import time
+import glob as glob_module
 
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical, VerticalScroll
+from textual.screen import ModalScreen
 from textual.widgets import (
-    Button, Footer, Header, Input, Label, RichLog,
+    Button, DirectoryTree, Footer, Header, Input, Label, RichLog,
     Rule, Select, Static, Switch, TabbedContent, TabPane,
 )
 from textual import work
+from rich.text import Text
+
+
+class PathPickerScreen(ModalScreen[str]):
+    """Modal directory/file picker."""
+
+    CSS = """
+    PathPickerScreen {
+        align: center middle;
+    }
+    #picker-dialog {
+        width: 70;
+        height: 24;
+        border: thick $primary;
+        background: $surface;
+        padding: 1 2;
+    }
+    #picker-dialog DirectoryTree {
+        height: 1fr;
+        margin-bottom: 1;
+    }
+    #picker-buttons {
+        height: 3;
+        align: center middle;
+    }
+    #picker-path {
+        height: 1;
+        color: $text-muted;
+        padding: 0 1;
+        margin-bottom: 1;
+    }
+    """
+
+    def __init__(self, start_path: str = "~", title: str = "Select Path"):
+        super().__init__()
+        self._start = os.path.expanduser(start_path)
+        self._title = title
+        self._selected = self._start
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="picker-dialog"):
+            yield Label(self._title, classes="form-label")
+            yield Static(self._start, id="picker-path")
+            yield DirectoryTree(self._start)
+            with Horizontal(id="picker-buttons"):
+                yield Button("Select", variant="primary", id="picker-select")
+                yield Button("Cancel", variant="default", id="picker-cancel")
+
+    def on_directory_tree_directory_selected(self, event: DirectoryTree.DirectorySelected) -> None:
+        self._selected = str(event.path)
+        self.query_one("#picker-path", Static).update(self._selected)
+
+    def on_directory_tree_file_selected(self, event: DirectoryTree.FileSelected) -> None:
+        self._selected = str(event.path)
+        self.query_one("#picker-path", Static).update(self._selected)
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "picker-select":
+            self.dismiss(self._selected)
+        elif event.button.id == "picker-cancel":
+            self.dismiss("")
 
 # Add parent dir to path so pipeline imports work
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -66,6 +134,20 @@ class OttoSplattoApp(App):
         margin-top: 1;
         min-width: 24;
     }
+    .browse-btn {
+        min-width: 10;
+        margin-top: 0;
+        margin-left: 1;
+    }
+    .path-row {
+        height: auto;
+    }
+    .path-row Input {
+        width: 1fr;
+    }
+    .hidden {
+        display: none;
+    }
     .status-bar {
         height: 1;
         background: $boost;
@@ -79,6 +161,11 @@ class OttoSplattoApp(App):
         color: $text;
         padding: 0 1;
         text-style: bold;
+    }
+    .help-text {
+        color: $text-muted;
+        margin-bottom: 1;
+        padding-left: 2;
     }
     """
 
@@ -95,6 +182,8 @@ class OttoSplattoApp(App):
         self._config: dict = {}
         self._ply_path: str | None = None
         self._device = None
+        self._upload_done = False
+        self._copyparty_proc: subprocess.Popen | None = None
 
     def compose(self) -> ComposeResult:
         yield Header(show_clock=True)
@@ -106,12 +195,18 @@ class OttoSplattoApp(App):
                 yield Label("Project Name", classes="form-label")
                 yield Input(placeholder="my_scene", id="project-name", classes="form-input")
                 yield Label("Input (video file or image directory)", classes="form-label")
-                yield Input(placeholder="/path/to/video.mp4", id="input-path", classes="form-input")
+                with Horizontal(classes="path-row"):
+                    yield Input(placeholder="/path/to/video.mp4 or /path/to/images/", id="input-path", classes="form-input")
+                    yield Button("Browse", variant="default", id="btn-browse-input", classes="browse-btn")
                 yield Label("Output Directory", classes="form-label")
-                yield Input(placeholder="/home/dylan/splats", id="output-dir", classes="form-input")
+                with Horizontal(classes="path-row"):
+                    yield Input(placeholder="/home/dylan/splats", id="output-dir", classes="form-input")
+                    yield Button("Browse", variant="default", id="btn-browse-output", classes="browse-btn")
                 with Horizontal():
                     yield Button("Create Project", variant="primary", id="btn-create")
                     yield Button("Load Existing", variant="default", id="btn-load")
+                    yield Button("Upload from Phone", variant="success", id="btn-upload")
+                    yield Button("Done Uploading", variant="warning", id="btn-upload-done", classes="hidden")
 
             # --- Tab 2: Extract ---
             with TabPane("Extract", id="tab-extract"):
@@ -131,11 +226,29 @@ class OttoSplattoApp(App):
                      ("OPENCV_FISHEYE", "OPENCV_FISHEYE")],
                     value="SIMPLE_RADIAL", id="camera-model",
                 )
+                yield Static(
+                    "SIMPLE_RADIAL — Best for phone cameras (iPhone, Android). "
+                    "Models one focal length + one radial distortion parameter. "
+                    "Use this unless you have a reason not to.\n"
+                    "PINHOLE — For calibrated cameras with no lens distortion. "
+                    "Rarely needed for phone photos.\n"
+                    "OPENCV — Full distortion model. Use for action cameras "
+                    "(GoPro) or wide-angle lenses.\n"
+                    "OPENCV_FISHEYE — For ultra-wide/fisheye lenses (>180° FOV).",
+                    classes="help-text",
+                )
                 yield Label("Matcher", classes="form-label")
                 yield Select[str](
                     [("Exhaustive (best for <500 images)", "exhaustive"),
                      ("Sequential (faster for video)", "sequential")],
                     value="exhaustive", id="matcher",
+                )
+                yield Static(
+                    "Exhaustive — Compares every image pair. Slower but finds all matches. "
+                    "Best for unordered photos (e.g. walking around an object).\n"
+                    "Sequential — Only compares neighboring frames. Much faster for "
+                    "video-extracted frames where order is known.",
+                    classes="help-text",
                 )
                 with Horizontal(classes="form-row"):
                     yield Switch(value=True, id="use-gpu")
@@ -206,6 +319,20 @@ class OttoSplattoApp(App):
     def _check_cancel(self) -> bool:
         return self._cancel
 
+    def _switch_tab(self, tab_id: str) -> None:
+        """Switch to a tab by ID. Safe to call from worker threads."""
+        def _do_switch():
+            try:
+                tc = self.query_one(TabbedContent)
+                tc.active = tab_id
+            except Exception as e:
+                self._log(f"[yellow]Tab switch failed: {e}[/]")
+        try:
+            self.app.call_from_thread(_do_switch)
+        except Exception:
+            # Fallback: might already be on main thread
+            _do_switch()
+
     def _load_config(self) -> dict:
         cfg_path = os.path.join(self.project_dir, "project.json")
         if os.path.isfile(cfg_path):
@@ -225,8 +352,7 @@ class OttoSplattoApp(App):
         self._log(f"[green]Loaded project:[/] {self.project_dir}")
 
         # Pre-fill PLY path if training output exists
-        import glob
-        plys = sorted(glob.glob(
+        plys = sorted(glob_module.glob(
             os.path.join(project_dir, "output", "point_cloud", "iteration_*", "point_cloud.ply")
         ))
         if plys:
@@ -235,6 +361,29 @@ class OttoSplattoApp(App):
                 self.query_one("#ply-path", Input).value = self._ply_path
             except Exception:
                 pass
+
+    def on_unmount(self) -> None:
+        if self._copyparty_proc is not None:
+            try:
+                self._copyparty_proc.terminate()
+                self._copyparty_proc.wait(timeout=5)
+            except Exception:
+                pass
+
+    @staticmethod
+    def _get_lan_ip() -> str:
+        try:
+            s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            s.connect(("8.8.8.8", 80))
+            ip = s.getsockname()[0]
+            s.close()
+            return ip
+        except Exception:
+            return "127.0.0.1"
+
+    def _do_finish_upload(self) -> None:
+        """Called on 'Done Uploading' button press — sets the flag for the worker."""
+        self._upload_done = True
 
     # ── actions ──────────────────────────────────────────────
 
@@ -257,8 +406,27 @@ class OttoSplattoApp(App):
             self._do_colmap()
         elif btn == "btn-train":
             self._do_train()
+        elif btn == "btn-upload":
+            self._do_upload_from_phone()
+        elif btn == "btn-upload-done":
+            self._do_finish_upload()
         elif btn == "btn-view":
             self._do_view()
+        elif btn == "btn-browse-input":
+            self._browse_path("input-path", "Select Input (video or image folder)")
+        elif btn == "btn-browse-output":
+            self._browse_path("output-dir", "Select Output Directory")
+
+    def _browse_path(self, input_id: str, title: str) -> None:
+        """Open a directory picker and fill the result into an Input widget."""
+        current = self.query_one(f"#{input_id}", Input).value.strip()
+        start = current if current and os.path.exists(current) else os.path.expanduser("~")
+
+        def _on_result(path: str) -> None:
+            if path:
+                self.query_one(f"#{input_id}", Input).value = path
+
+        self.push_screen(PathPickerScreen(start, title), _on_result)
 
     # ── workers ──────────────────────────────────────────────
 
@@ -292,6 +460,34 @@ class OttoSplattoApp(App):
         self._log(f"[green]Project created:[/] {self.project_dir}")
         self._log(f"  Input type: {'video' if is_video else 'image directory'}")
 
+        if is_video:
+            # Video input — user needs to extract frames next
+            self._log("[cyan]Video input detected — advancing to Extract tab[/]")
+            self._switch_tab("tab-extract")
+        else:
+            # Image directory — copy images into project and skip extraction
+            src_images = (
+                glob_module.glob(os.path.join(input_path, "*.jpg"))
+                + glob_module.glob(os.path.join(input_path, "*.JPG"))
+                + glob_module.glob(os.path.join(input_path, "*.jpeg"))
+                + glob_module.glob(os.path.join(input_path, "*.png"))
+            )
+            dest = os.path.join(self.project_dir, "images")
+            for img in src_images:
+                shutil.copy2(img, dest)
+
+            num_images = len(src_images)
+            self._config["num_frames"] = num_images
+            if "extract" not in self._config["steps_completed"]:
+                self._config["steps_completed"].append("extract")
+            self._save_config()
+
+            self._log(
+                f"[green]{num_images} images detected[/] — skipping frame extraction, "
+                f"advancing to reconstruction"
+            )
+            self._switch_tab("tab-reconstruct")
+
     @work(thread=True)
     def _do_load_project(self) -> None:
         output_dir = self.query_one("#output-dir", Input).value.strip()
@@ -308,6 +504,147 @@ class OttoSplattoApp(App):
             self._load_project(path)
         else:
             self._log(f"[red]No project.json in {path}[/]")
+
+    @work(thread=True)
+    def _do_upload_from_phone(self) -> None:
+        import qrcode
+
+        name = self.query_one("#project-name", Input).value.strip()
+        output_dir = self.query_one("#output-dir", Input).value.strip()
+
+        if not name or not output_dir:
+            self._log("[red]Fill in Project Name and Output Directory[/]")
+            return
+
+        self.project_dir = os.path.join(output_dir, name)
+        images_dir = os.path.join(self.project_dir, "images")
+        os.makedirs(images_dir, exist_ok=True)
+        os.makedirs(os.path.join(self.project_dir, "output"), exist_ok=True)
+
+        self._config = {
+            "name": name,
+            "input_path": images_dir,
+            "input_type": "images",
+            "steps_completed": [],
+        }
+        self._save_config()
+        self._set_status(f"Project: {self.project_dir}")
+
+        # Start copyparty
+        try:
+            self._copyparty_proc = subprocess.Popen(
+                ["copyparty", "-v", f"{images_dir}::rw", "--http-only", "-p", "3210", "-q"],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+        except FileNotFoundError:
+            self._log("[red]copyparty not found — install with: pip install copyparty[/]")
+            return
+        except OSError as e:
+            self._log(f"[red]Failed to start copyparty: {e}[/]")
+            return
+
+        # Detect LAN IP and generate QR code
+        lan_ip = self._get_lan_ip()
+        url = f"http://{lan_ip}:3210/"
+
+        if lan_ip == "127.0.0.1":
+            self._log("[yellow]Warning: Could not detect LAN IP, using 127.0.0.1[/]")
+
+        qr = qrcode.QRCode(box_size=1, border=1)
+        qr.add_data(url)
+        qr.make()
+        buf = io.StringIO()
+        qr.print_ascii(out=buf, invert=True)
+        qr_text = buf.getvalue()
+
+        self._log("")
+        self._log(f"[bold green]Upload URL:[/] {url}")
+        self._log("")
+        log_widget = self.query_one("#log", RichLog)
+        for line in qr_text.splitlines():
+            log_widget.write(Text(line))
+        self._log("")
+        self._log("Open this URL on your phone to upload photos")
+        self._log("")
+
+        # Swap buttons: hide Upload, show Done Uploading
+        self._upload_done = False
+        self.app.call_from_thread(
+            lambda: (
+                self.query_one("#btn-upload", Button).add_class("hidden"),
+                self.query_one("#btn-upload-done", Button).remove_class("hidden"),
+            )
+        )
+
+        # Poll loop
+        IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".heic"}
+        last_count = 0
+        while not self._upload_done:
+            time.sleep(2)
+            try:
+                files = os.listdir(images_dir)
+                count = sum(
+                    1 for f in files if os.path.splitext(f)[1].lower() in IMAGE_EXTS
+                )
+                if count != last_count:
+                    self._log(f"[cyan]{count} images received…[/]")
+                    last_count = count
+            except Exception:
+                pass
+
+        # ── Cleanup ──
+        # Terminate copyparty
+        if self._copyparty_proc is not None:
+            try:
+                self._copyparty_proc.terminate()
+                self._copyparty_proc.wait(timeout=5)
+            except Exception:
+                pass
+            self._copyparty_proc = None
+
+        # Final image count
+        try:
+            files = os.listdir(images_dir)
+            final_count = sum(
+                1 for f in files if os.path.splitext(f)[1].lower() in IMAGE_EXTS
+            )
+        except Exception:
+            final_count = 0
+
+        if final_count == 0:
+            self._log("[yellow]Warning: No images were uploaded[/]")
+        else:
+            self._log(f"[green]Upload complete — {final_count} images received[/]")
+
+        # Check for HEIC files
+        has_heic = any(
+            f.lower().endswith(".heic") for f in os.listdir(images_dir)
+        )
+        if has_heic:
+            self._log(
+                "[yellow]HEIC images detected — set your iPhone to 'Most Compatible' "
+                "(JPEG) in Settings → Camera → Formats, or convert with: "
+                "`mogrify -format jpg *.heic`[/]"
+            )
+
+        # Save config
+        self._config["num_frames"] = final_count
+        if "extract" not in self._config.get("steps_completed", []):
+            self._config.setdefault("steps_completed", []).append("extract")
+        self._save_config()
+
+        # Swap buttons back: show Upload, hide Done Uploading
+        self.app.call_from_thread(
+            lambda: (
+                self.query_one("#btn-upload", Button).remove_class("hidden"),
+                self.query_one("#btn-upload-done", Button).add_class("hidden"),
+            )
+        )
+
+        # Auto-advance to Reconstruct tab
+        self._log("[cyan]Advancing to Reconstruct tab[/]")
+        self._switch_tab("tab-reconstruct")
 
     @work(thread=True)
     def _do_extract(self) -> None:
@@ -341,6 +678,9 @@ class OttoSplattoApp(App):
             self._config["num_frames"] = result["num_frames"]
             self._save_config()
             self._log(f"[green]✓ {result['num_frames']} frames ready[/]")
+            # Auto-advance to Reconstruct tab
+            self._log("[cyan]Advancing to Reconstruct tab[/]")
+            self._switch_tab("tab-reconstruct")
         else:
             self._log(f"[red]Extraction failed: {result.get('message', result['status'])}[/]")
 
@@ -359,6 +699,13 @@ class OttoSplattoApp(App):
 
         self._log(f"Running COLMAP ({camera_model}, {matcher}, gpu={use_gpu})…")
 
+        # Auto-convert HEIC to JPEG before COLMAP
+        from pipeline.convert import convert_heic_to_jpeg
+        images_dir = os.path.join(self.project_dir, "images")
+        conv = convert_heic_to_jpeg(images_dir, on_output=self._log)
+        if conv.get("converted", 0) > 0:
+            self._log(f"[green]✓ Converted {conv['converted']} HEIC files to JPEG[/]")
+
         result = run_colmap(
             self.project_dir,
             camera_model=camera_model, use_gpu=use_gpu,
@@ -373,6 +720,9 @@ class OttoSplattoApp(App):
             self._config["train_source"] = result["train_source"]
             self._save_config()
             self._log(f"[green]✓ COLMAP complete — {result['num_images']} images reconstructed[/]")
+            # Auto-advance to Train tab
+            self._log("[cyan]Advancing to Train tab[/]")
+            self._switch_tab("tab-train")
         else:
             self._log(f"[red]COLMAP failed at {result.get('step', '?')}: {result.get('message', '')}[/]")
 
@@ -404,7 +754,11 @@ class OttoSplattoApp(App):
             self._ply_path = result.get("ply_path")
             if self._ply_path:
                 try:
-                    self.query_one("#ply-path", Input).value = self._ply_path
+                    self.app.call_from_thread(
+                        lambda: setattr(
+                            self.query_one("#ply-path", Input), "value", self._ply_path
+                        )
+                    )
                 except Exception:
                     pass
             self._load_config()
@@ -413,6 +767,9 @@ class OttoSplattoApp(App):
             self._config["ply_path"] = self._ply_path
             self._save_config()
             self._log(f"[green]✓ Training complete![/]")
+            # Auto-advance to View tab with PLY path pre-filled
+            self._log("[cyan]Advancing to View tab[/]")
+            self._switch_tab("tab-view")
         else:
             self._log(f"[red]Training failed: {result.get('message', result['status'])}[/]")
 
@@ -429,6 +786,10 @@ class OttoSplattoApp(App):
 
         port = int(self.query_one("#viewer-port", Input).value or "8765")
         self._log(f"Launching viewer for {ply}…")
+
+        if os.environ.get("XDG_SESSION_TYPE", "").lower() == "wayland":
+            self._log("[yellow]⚠ Wayland session detected — launching Chrome with X11 backend for WebGL[/]")
+
         result = launch_viewer(ply, port=port, on_output=self._log)
 
         if result["status"] == "success":

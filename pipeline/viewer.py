@@ -2,6 +2,8 @@
 import http.server
 import functools
 import os
+import shutil
+import subprocess
 import threading
 import webbrowser
 from typing import Optional, Callable
@@ -53,7 +55,7 @@ const scene = new THREE.Scene();
 const camera = new THREE.PerspectiveCamera(60, innerWidth/innerHeight, 0.05, 500);
 camera.position.set(0, 2, 6);
 
-const renderer = new THREE.WebGLRenderer({ antialias: false });
+const renderer = new THREE.WebGLRenderer({ antialias: false, preserveDrawingBuffer: true });
 renderer.setSize(innerWidth, innerHeight);
 renderer.setPixelRatio(devicePixelRatio);
 document.body.appendChild(renderer.domElement);
@@ -62,51 +64,111 @@ const controls = new OrbitControls(camera, renderer.domElement);
 controls.enableDamping = true;
 controls.dampingFactor = 0.12;
 
-// Load splat with Spark.js
-statusEl.textContent = 'Loading splat…';
+// Expose for debugging
+window.__scene = scene;
+window.__camera = camera;
+window.__controls = controls;
 
-try {
-  const splat = new SplatMesh({ url: plyUrl });
-  scene.add(splat);
-
-  // Wait for the splat to load, then frame it
-  const checkLoaded = setInterval(() => {
-    // SplatMesh populates geometry once loaded
-    if (splat.children.length > 0 || splat.geometry?.boundingSphere) {
-      clearInterval(checkLoaded);
-      statusEl.textContent = `Splat loaded — ${plyFile}`;
-
-      // Try to frame the scene
-      const box = new THREE.Box3().setFromObject(splat);
-      if (box.isEmpty()) {
-        camera.position.set(0, 1, 5);
-      } else {
-        const center = box.getCenter(new THREE.Vector3());
-        const size = box.getSize(new THREE.Vector3());
-        const maxDim = Math.max(size.x, size.y, size.z);
-        controls.target.copy(center);
-        camera.position.copy(center);
-        camera.position.z += maxDim * 1.5;
-        camera.position.y += maxDim * 0.3;
-      }
-      controls.update();
-    }
-  }, 200);
-
-  // Timeout after 15s
-  setTimeout(() => {
-    clearInterval(checkLoaded);
-    if (statusEl.textContent.includes('Loading')) {
-      statusEl.textContent = `Splat loaded — ${plyFile}`;
-    }
-  }, 15000);
-
-} catch(e) {
-  console.error('Spark.js load error:', e);
-  statusEl.textContent = 'Error: ' + e.message;
+function frameCamera(box) {
+  if (!box || box.isEmpty()) {
+    camera.position.set(0, 1, 5);
+    return;
+  }
+  const center = box.getCenter(new THREE.Vector3());
+  const size = box.getSize(new THREE.Vector3());
+  const radius = size.length() / 2;
+  // Position camera to see the whole scene: use FOV to compute distance
+  const fov = camera.fov * (Math.PI / 180);
+  const dist = radius / Math.sin(fov / 2);
+  controls.target.copy(center);
+  camera.position.set(center.x, center.y + radius * 0.3, center.z + dist * 0.8);
+  camera.near = dist * 0.01;
+  camera.far = dist * 5;
+  camera.updateProjectionMatrix();
+  controls.update();
 }
 
-// Render loop
+// SH DC coefficient to linear RGB
+function shToColor(f0, f1, f2) {
+  const C0 = 0.2820947917738781;
+  return [
+    Math.max(0, Math.min(1, 0.5 + C0 * f0)),
+    Math.max(0, Math.min(1, 0.5 + C0 * f1)),
+    Math.max(0, Math.min(1, 0.5 + C0 * f2)),
+  ];
+}
+
+// Point cloud fallback — parse 3DGS PLY into Three.js Points
+async function loadPointCloud(url) {
+  const resp = await fetch(url);
+  const buf = await resp.arrayBuffer();
+  const bytes = new Uint8Array(buf);
+
+  // Parse header
+  let headerEnd = 0;
+  const decoder = new TextDecoder();
+  for (let i = 0; i < Math.min(bytes.length, 4096); i++) {
+    if (bytes[i] === 0x0A) { // newline
+      const line = decoder.decode(bytes.slice(headerEnd, i)).trim();
+      if (line === 'end_header') { headerEnd = i + 1; break; }
+      headerEnd = i + 1;
+    }
+  }
+
+  // Re-parse header for property layout
+  const headerStr = decoder.decode(bytes.slice(0, headerEnd));
+  const lines = headerStr.split('\n').map(l => l.trim());
+  let vertexCount = 0;
+  const props = [];
+  for (const line of lines) {
+    if (line.startsWith('element vertex')) vertexCount = parseInt(line.split(' ')[2]);
+    if (line.startsWith('property float')) props.push(line.split(' ')[2]);
+  }
+
+  const stride = props.length * 4; // all floats
+  const propIndex = (name) => props.indexOf(name);
+
+  const positions = new Float32Array(vertexCount * 3);
+  const colors = new Float32Array(vertexCount * 3);
+  const data = new DataView(buf, headerEnd);
+
+  const ix = propIndex('x'), iy = propIndex('y'), iz = propIndex('z');
+  const idc0 = propIndex('f_dc_0'), idc1 = propIndex('f_dc_1'), idc2 = propIndex('f_dc_2');
+  for (let i = 0; i < vertexCount; i++) {
+    const off = i * stride;
+    positions[i*3]   = data.getFloat32(off + ix*4, true);
+    positions[i*3+1] = data.getFloat32(off + iy*4, true);
+    positions[i*3+2] = data.getFloat32(off + iz*4, true);
+
+    if (idc0 >= 0) {
+      const [r, g, b] = shToColor(
+        data.getFloat32(off + idc0*4, true),
+        data.getFloat32(off + idc1*4, true),
+        data.getFloat32(off + idc2*4, true),
+      );
+      colors[i*3] = r; colors[i*3+1] = g; colors[i*3+2] = b;
+    } else {
+      colors[i*3] = 1; colors[i*3+1] = 1; colors[i*3+2] = 1;
+    }
+  }
+
+  const geom = new THREE.BufferGeometry();
+  geom.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+  geom.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+  geom.computeBoundingBox();
+
+  // Scale point size relative to scene extent
+  const bbox = geom.boundingBox;
+  const extent = new THREE.Vector3();
+  bbox.getSize(extent);
+  const maxDim = Math.max(extent.x, extent.y, extent.z);
+  const pointSize = Math.max(0.01, maxDim / 500);
+
+  const mat = new THREE.PointsMaterial({ size: pointSize, vertexColors: true, sizeAttenuation: true });
+  return new THREE.Points(geom, mat);
+}
+
+// Start render loop immediately — Spark.js needs active rendering during init
 renderer.setAnimationLoop(() => {
   controls.update();
   renderer.render(scene, camera);
@@ -117,6 +179,62 @@ addEventListener('resize', () => {
   camera.updateProjectionMatrix();
   renderer.setSize(innerWidth, innerHeight);
 });
+
+// Load splat with Spark.js
+statusEl.textContent = 'Loading splat…';
+
+let splatLoaded = false;
+try {
+  const splat = new SplatMesh({ url: plyUrl });
+  window.__splat = splat;
+  scene.add(splat);
+
+  await splat.initialized;
+  splatLoaded = true;
+  statusEl.textContent = `Splat loaded — ${plyFile}`;
+  frameCamera(splat.getBoundingBox());
+
+  // Verify Spark.js actually rendered something by reading pixels
+  // immediately after a render call (before the buffer is cleared)
+  let hasPixels = false;
+  const gl = renderer.getContext();
+  const w = gl.drawingBufferWidth, h = gl.drawingBufferHeight;
+
+  for (let attempt = 0; attempt < 10 && !hasPixels; attempt++) {
+    await new Promise(r => setTimeout(r, 500));
+    renderer.render(scene, camera);
+    // Read a row of pixels across the middle of the screen right after render
+    const row = new Uint8Array(w * 4);
+    gl.readPixels(0, Math.floor(h / 2), w, 1, gl.RGBA, gl.UNSIGNED_BYTE, row);
+    for (let i = 0; i < row.length; i += 4) {
+      if (row[i] > 2 || row[i+1] > 2 || row[i+2] > 2) { hasPixels = true; break; }
+    }
+  }
+
+  if (!hasPixels) {
+    console.warn('Spark.js rendered black after 5s — falling back to point cloud');
+    scene.remove(splat);
+    splat.dispose();
+    splatLoaded = false;
+  }
+} catch(e) {
+  console.warn('Spark.js failed:', e.message, '— using point cloud fallback');
+  splatLoaded = false;
+}
+
+if (!splatLoaded) {
+  statusEl.textContent = 'Loading point cloud…';
+  try {
+    const points = await loadPointCloud(plyUrl);
+    scene.add(points);
+    frameCamera(points.geometry.boundingBox);
+    statusEl.textContent = `Point cloud loaded — ${plyFile} (${(points.geometry.attributes.position.count/1000).toFixed(0)}K points)`;
+  } catch(e) {
+    console.error('Point cloud load error:', e);
+    statusEl.textContent = 'Error: ' + e.message;
+  }
+}
+
 </script>
 </body>
 </html>"""
@@ -136,6 +254,30 @@ class _Handler(http.server.SimpleHTTPRequestHandler):
 
     def log_message(self, fmt, *args):
         pass  # silence default logging
+
+
+def _is_wayland() -> bool:
+    """Check if the current session is running on Wayland."""
+    return os.environ.get("XDG_SESSION_TYPE", "").lower() == "wayland"
+
+
+def _open_browser(url: str, on_output: Optional[Callable[[str], None]] = None) -> None:
+    """Open URL in a browser, working around Wayland+NVIDIA WebGL issues."""
+    if _is_wayland():
+        # Wayland + NVIDIA breaks Chrome's GPU process — WebGL is unavailable.
+        # Launch Chromium/Chrome with --ozone-platform=x11 to force X11 backend.
+        for name in ("chromium-browser", "chromium", "google-chrome", "google-chrome-stable"):
+            path = shutil.which(name)
+            if path:
+                if on_output:
+                    on_output(f"Wayland detected — launching {name} with X11 backend for WebGL")
+                subprocess.Popen(
+                    [path, "--ozone-platform=x11", url],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                )
+                return
+    webbrowser.open(url)
 
 
 def launch_viewer(
@@ -160,10 +302,13 @@ def launch_viewer(
         on_output(f"Serving {ply_path}")
         on_output("Press Ctrl+C to stop")
 
-    if open_browser:
-        webbrowser.open(url)
-
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
+
+    if open_browser:
+        try:
+            _open_browser(url, on_output)
+        except Exception:
+            pass  # non-fatal — user can open URL manually
 
     return {"status": "success", "url": url, "server": server}

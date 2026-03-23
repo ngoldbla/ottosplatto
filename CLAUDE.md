@@ -12,7 +12,8 @@ pipeline/device.py       GPU/arch detection (Ada, Hopper, Blackwell, DGX Spark)
 pipeline/extract.py      FFmpeg frame extraction from video
 pipeline/reconstruct.py  COLMAP pipeline (feature extract → match → map → undistort)
 pipeline/train.py        Wraps original 3DGS train.py via conda
-pipeline/viewer.py       HTTP server + Three.js PLY point cloud viewer
+pipeline/convert.py      HEIC/HEIF → JPEG conversion with EXIF preservation
+pipeline/viewer.py       HTTP server + Spark.js gaussian splat viewer (with point cloud fallback)
 tui/app.py               Textual TUI (tabbed: Project → Extract → Reconstruct → Train → View)
 ```
 
@@ -46,7 +47,8 @@ These must be installed on the host before the pipeline will work:
 ## Known Limitations
 
 - **Textureless scenes** (smooth walls, empty interiors) will fail COLMAP reconstruction. This is a fundamental COLMAP limitation, not an OttoSplatto bug. COLMAP-free methods (G3Splat, VicaSplat) are needed for those scenes.
-- The PLY viewer renders point clouds via Three.js, not actual gaussian splats. For full splat rendering, open the PLY in [SuperSplat](https://playcanvas.com/supersplat/editor) or a dedicated viewer.
+- The PLY viewer renders gaussian splats via Spark.js (v0.1.10). If Spark.js fails (e.g. no GPU / software WebGL), it falls back to a Three.js point cloud renderer that parses 3DGS PLY data (positions + SH DC colors) directly.
+- **Wayland + NVIDIA breaks Chrome WebGL.** Chrome's GPU process crashes under Wayland with NVIDIA drivers, disabling WebGL entirely. The viewer auto-detects Wayland and launches Chrome with `--ozone-platform=x11` to work around this. If you open the URL manually, use: `chromium-browser --ozone-platform=x11 http://127.0.0.1:8765/?ply=FILE.ply`
 - DGX Spark (aarch64 + Blackwell) support is implemented in device detection but untested on real hardware. The 3DGS CUDA extensions may need recompilation with `TORCH_CUDA_ARCH_LIST="10.0"`.
 
 ## Testing

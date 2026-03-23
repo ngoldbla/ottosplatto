@@ -17,8 +17,36 @@ def _get_colmap_version() -> tuple:
     return (3, 0)
 
 
-def _run_cmd(cmd, on_output=None, check_cancel=None):
-    """Run a subprocess command with live output."""
+def _parse_progress(line, step_name):
+    """Extract user-friendly progress from COLMAP output lines."""
+    s = line.strip()
+    # Feature extraction: "Processed file [23/47]"
+    m = re.search(r"Processed file \[(\d+)/(\d+)\]", s)
+    if m:
+        return f"  Extracting features: image {m.group(1)}/{m.group(2)}"
+    # Matching: "Matching block [3/10]" or processed pairs
+    m = re.search(r"Matching block \[(\d+)/(\d+)\]", s)
+    if m:
+        return f"  Matching: block {m.group(1)}/{m.group(2)}"
+    # Mapper: "Registering image #N (M)" or registered images count
+    m = re.search(r"Registering image #(\d+) \((\d+)\)", s)
+    if m:
+        return f"  Mapping: registered image {m.group(1)} ({m.group(2)} total)"
+    m = re.search(r"=>\s+Registered images:\s+(\d+)", s)
+    if m:
+        return f"  Registered images: {m.group(1)}"
+    m = re.search(r"=>\s+Points:\s+(\d+)", s)
+    if m:
+        return f"  3D points: {m.group(1)}"
+    # Undistortion progress
+    m = re.search(r"Undistorting image \[(\d+)/(\d+)\]", s)
+    if m:
+        return f"  Undistorting: image {m.group(1)}/{m.group(2)}"
+    return None
+
+
+def _run_cmd(cmd, on_output=None, check_cancel=None, step_name=""):
+    """Run a subprocess command with live progress output."""
     if on_output:
         on_output(f"$ {' '.join(cmd)}")
 
@@ -27,13 +55,17 @@ def _run_cmd(cmd, on_output=None, check_cancel=None):
         text=True, bufsize=1,
     )
 
+    last_progress = ""
     for line in iter(process.stdout.readline, ""):
         if check_cancel and check_cancel():
             process.terminate()
             process.wait()
             return -1
         if on_output and line.strip():
-            on_output(line.strip())
+            progress = _parse_progress(line, step_name)
+            if progress and progress != last_progress:
+                on_output(progress)
+                last_progress = progress
 
     process.wait()
     return process.returncode
@@ -79,48 +111,63 @@ def run_colmap(
 
     gpu_val = "1" if use_gpu else "0"
 
+    import time
+
     # --- Step 1: Feature extraction ---
     if on_output:
-        on_output("━━━ Step 1/4: Feature Extraction ━━━")
+        on_output(f"━━━ Step 1/4: Feature Extraction ({num_images} images) ━━━")
+        on_output("  Finding keypoints in each image...")
 
+    t0 = time.monotonic()
     rc = _run_cmd([
         "colmap", "feature_extractor",
         "--database_path", database_path,
         "--image_path", images_dir,
         "--ImageReader.camera_model", camera_model,
         f"--{extract_gpu}", gpu_val,
-    ], on_output, check_cancel)
+    ], on_output, check_cancel, "extract")
 
     if rc != 0:
         return {"status": "error", "step": "feature_extraction", "returncode": rc}
+    if on_output:
+        on_output(f"  ✓ Features extracted in {time.monotonic()-t0:.0f}s")
 
     # --- Step 2: Feature matching ---
+    pairs = num_images * (num_images - 1) // 2 if matcher == "exhaustive" else num_images - 1
     if on_output:
         on_output(f"━━━ Step 2/4: {matcher.title()} Matching ━━━")
+        on_output(f"  Comparing ~{pairs} image pairs — this is the slow step...")
 
+    t0 = time.monotonic()
     matcher_cmd = "exhaustive_matcher" if matcher == "exhaustive" else "sequential_matcher"
     rc = _run_cmd([
         "colmap", matcher_cmd,
         "--database_path", database_path,
         f"--{match_gpu}", gpu_val,
-    ], on_output, check_cancel)
+    ], on_output, check_cancel, "match")
 
     if rc != 0:
         return {"status": "error", "step": "matching", "returncode": rc}
+    if on_output:
+        on_output(f"  ✓ Matching done in {time.monotonic()-t0:.0f}s")
 
     # --- Step 3: Sparse mapping ---
     if on_output:
         on_output("━━━ Step 3/4: Sparse Mapping ━━━")
+        on_output("  Triangulating 3D points from matched features...")
 
+    t0 = time.monotonic()
     rc = _run_cmd([
         "colmap", "mapper",
         "--database_path", database_path,
         "--image_path", images_dir,
         "--output_path", sparse_dir,
-    ], on_output, check_cancel)
+    ], on_output, check_cancel, "map")
 
     if rc != 0:
         return {"status": "error", "step": "mapper", "returncode": rc}
+    if on_output:
+        on_output(f"  ✓ Mapping done in {time.monotonic()-t0:.0f}s")
 
     sparse_model = os.path.join(sparse_dir, "0")
     if not os.path.isdir(sparse_model):
@@ -134,7 +181,9 @@ def run_colmap(
     if undistort:
         if on_output:
             on_output("━━━ Step 4/4: Image Undistortion ━━━")
+            on_output("  Removing lens distortion from images...")
 
+        t0 = time.monotonic()
         undistorted_dir = os.path.join(project_dir, "undistorted")
         rc = _run_cmd([
             "colmap", "image_undistorter",
@@ -142,12 +191,14 @@ def run_colmap(
             "--input_path", sparse_model,
             "--output_path", undistorted_dir,
             "--output_type", "COLMAP",
-        ], on_output, check_cancel)
+        ], on_output, check_cancel, "undistort")
 
         if rc != 0:
             if on_output:
-                on_output("Undistortion failed — training will use raw images")
+                on_output("  ⚠ Undistortion failed — training will use raw images")
         else:
+            if on_output:
+                on_output(f"  ✓ Undistortion done in {time.monotonic()-t0:.0f}s")
             # Original 3DGS expects sparse/0/  — restructure if needed
             undist_sparse = os.path.join(undistorted_dir, "sparse")
             undist_sparse_0 = os.path.join(undist_sparse, "0")
