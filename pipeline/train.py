@@ -1,7 +1,9 @@
 """Gaussian Splatting training wrapper — finds and runs the original 3DGS trainer."""
+import re
 import subprocess
 import os
 import glob
+import time
 from typing import Optional, Callable
 
 SEARCH_PATHS = [
@@ -47,6 +49,50 @@ def install_trainer(on_output: Optional[Callable] = None) -> Optional[str]:
         on_output(f"  pip install {dest}/submodules/simple-knn")
 
     return dest
+
+
+def _parse_training_line(line, total_iters, last_report_iter, report_every, t_start):
+    """Parse 3DGS training output into user-friendly progress messages."""
+    # Match iteration progress: various formats from different 3DGS versions
+    # "Training progress  7000/30000" or "[ITER 7000]"
+    m = re.search(r"(?:Training progress\s+|ITER\s+|\bIteration\s+|step\s+)(\d+)", line, re.IGNORECASE)
+    if m:
+        cur_iter = int(m.group(1))
+        if cur_iter - last_report_iter >= report_every or cur_iter == total_iters:
+            pct = cur_iter / total_iters * 100
+            elapsed = time.monotonic() - t_start
+            if cur_iter > 0:
+                eta = elapsed / cur_iter * (total_iters - cur_iter)
+                eta_str = f"{eta/60:.1f}min left" if eta > 60 else f"{eta:.0f}s left"
+            else:
+                eta_str = "calculating…"
+
+            # Extract loss if present
+            loss_m = re.search(r"(?:loss|Loss)[=:\s]+([0-9.]+)", line)
+            loss_str = f"  loss={loss_m.group(1)}" if loss_m else ""
+
+            # Extract point count if present
+            pts_m = re.search(r"(?:points?|gaussians?|splats?)[=:\s]+([0-9,]+)", line, re.IGNORECASE)
+            pts_str = f"  pts={pts_m.group(1)}" if pts_m else ""
+
+            bar_len = 20
+            filled = int(bar_len * cur_iter / total_iters)
+            bar = "█" * filled + "░" * (bar_len - filled)
+
+            msg = f"  [{bar}] {cur_iter}/{total_iters} ({pct:.0f}%){loss_str}{pts_str} — {eta_str}"
+            return {"msg": msg, "iter": cur_iter}
+
+    # Catch saving checkpoints
+    if re.search(r"saving.*iteration|point_cloud.*saved", line, re.IGNORECASE):
+        return {"msg": f"  💾 {line}"}
+
+    # Catch densification events
+    if re.search(r"densif|prun|split|clone|reset", line, re.IGNORECASE):
+        pts_m = re.search(r"(\d[\d,]+)\s*(?:points?|gaussians?)", line, re.IGNORECASE)
+        if pts_m:
+            return {"msg": f"  🔬 Densification: {pts_m.group(1)} gaussians"}
+
+    return None
 
 
 def train(
@@ -98,6 +144,7 @@ def train(
 
     if on_output:
         on_output(f"$ {' '.join(cmd)}")
+        on_output(f"Training {iterations} iterations — this will take a few minutes…")
 
     env = os.environ.copy()
     env["CUDA_VISIBLE_DEVICES"] = env.get("CUDA_VISIBLE_DEVICES", "0")
@@ -109,15 +156,36 @@ def train(
         text=True, bufsize=1, env=env,
     )
 
+    t_start = time.monotonic()
+    last_report_iter = 0
+    report_every = max(500, iterations // 20)  # ~20 progress updates
+
     for line in iter(process.stdout.readline, ""):
         if check_cancel and check_cancel():
             process.terminate()
             process.wait()
             return {"status": "cancelled"}
-        if on_output and line.strip():
-            on_output(line.strip())
+
+        s = line.strip()
+        if not s:
+            continue
+
+        # Parse 3DGS training output for key milestones
+        # Format: "Training progress  7000/30000   Loss: 0.0234"
+        # or: "[ITER 7000] ... loss = 0.0234"
+        progress = _parse_training_line(s, iterations, last_report_iter, report_every, t_start)
+        if progress:
+            if on_output:
+                on_output(progress["msg"])
+            last_report_iter = progress.get("iter", last_report_iter)
+        elif on_output and ("error" in s.lower() or "warning" in s.lower() or "saving" in s.lower()):
+            on_output(f"  {s}")
 
     process.wait()
+
+    if on_output:
+        elapsed = time.monotonic() - t_start
+        on_output(f"  Training finished in {elapsed/60:.1f} minutes")
 
     if process.returncode != 0:
         return {"status": "error", "returncode": process.returncode}
