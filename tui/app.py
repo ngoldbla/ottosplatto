@@ -722,6 +722,30 @@ class OttoSplattoApp(App):
                 pass
             self._copyparty_proc = None
 
+        # Flatten any subdirectories — phone uploads often create nested folders
+        for root, dirs, files in os.walk(images_dir):
+            if root == images_dir:
+                continue
+            for f in files:
+                if os.path.splitext(f)[1].lower() in IMAGE_EXTS:
+                    src = os.path.join(root, f)
+                    dst = os.path.join(images_dir, f)
+                    if not os.path.exists(dst):
+                        shutil.move(src, dst)
+        # Remove empty subdirs
+        for d in os.listdir(images_dir):
+            dp = os.path.join(images_dir, d)
+            if os.path.isdir(dp):
+                shutil.rmtree(dp, ignore_errors=True)
+
+        # Also check for transforms.json (app-provided camera poses)
+        for root, dirs, files in os.walk(self.project_dir):
+            if "transforms.json" in files and root != self.project_dir:
+                src = os.path.join(root, "transforms.json")
+                shutil.copy2(src, os.path.join(self.project_dir, "transforms.json"))
+                self._log("[green]Found transforms.json — camera poses provided by capture app[/]")
+                break
+
         # Final image count
         try:
             files = os.listdir(images_dir)
@@ -732,20 +756,40 @@ class OttoSplattoApp(App):
             final_count = 0
 
         if final_count == 0:
-            self._log("[yellow]Warning: No images were uploaded[/]")
+            self._log("[red]No images found after upload.[/]")
+            self._log("[yellow]Tip: make sure you uploaded image files (JPG/PNG/HEIC), not a zip or other archive.[/]")
         else:
-            self._log(f"[green]Upload complete — {final_count} images received[/]")
+            self._log(f"[green]✓ Upload complete — {final_count} images in project[/]")
 
-        # Check for HEIC files
-        has_heic = any(
-            f.lower().endswith(".heic") for f in os.listdir(images_dir)
-        )
-        if has_heic:
-            self._log(
-                "[yellow]HEIC images detected — set your iPhone to 'Most Compatible' "
-                "(JPEG) in Settings → Camera → Formats, or convert with: "
-                "`mogrify -format jpg *.heic`[/]"
+        # Convert HEIC to JPEG if needed
+        from pipeline.convert import convert_heic_to_jpeg
+        conv = convert_heic_to_jpeg(images_dir, on_output=self._log)
+        if conv.get("converted", 0) > 0:
+            self._log(f"[green]✓ Converted {conv['converted']} HEIC files to JPEG[/]")
+            # Recount after conversion
+            files = os.listdir(images_dir)
+            final_count = sum(
+                1 for f in files if os.path.splitext(f)[1].lower() in {".jpg", ".jpeg", ".png"}
             )
+
+        # Run EXIF detection
+        from pipeline.exif_detect import detect_camera
+        detection = detect_camera(images_dir, on_output=self._log)
+        if detection.get("single_camera"):
+            self._config["single_camera"] = True
+        # Auto-fill Reconstruct tab
+        if detection["status"] == "detected":
+            cam_model = detection["camera_model"]
+            matcher_val = detection["matcher"]
+            try:
+                self.app.call_from_thread(
+                    lambda: self.query_one("#camera-model", Select).__setattr__("value", cam_model)
+                )
+                self.app.call_from_thread(
+                    lambda: self.query_one("#matcher", Select).__setattr__("value", matcher_val)
+                )
+            except Exception:
+                pass
 
         # Save config
         self._config["num_frames"] = final_count
@@ -761,9 +805,11 @@ class OttoSplattoApp(App):
             )
         )
 
-        # Auto-advance to Reconstruct tab
-        self._log("[cyan]Advancing to Reconstruct tab[/]")
-        self._switch_tab("tab-reconstruct")
+        if final_count > 0:
+            self._log(f"[bold green]Ready to reconstruct![/] {final_count} images → advancing to Reconstruct tab")
+            self._switch_tab("tab-reconstruct")
+        else:
+            self._log("[yellow]Upload the images and try again.[/]")
 
     @work(thread=True)
     def _do_extract(self) -> None:
