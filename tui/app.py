@@ -292,7 +292,9 @@ class OttoSplattoApp(App):
                 yield Input(placeholder="auto-detected after training", id="ply-path", classes="form-input")
                 yield Label("Viewer Port", classes="form-label")
                 yield Input(value="8765", id="viewer-port", classes="form-input")
-                yield Button("Launch Viewer", variant="primary", id="btn-view")
+                with Horizontal():
+                    yield Button("Launch Viewer", variant="primary", id="btn-view")
+                    yield Button("Clean Splat", variant="warning", id="btn-clean")
 
         with Vertical(id="log-panel"):
             yield RichLog(id="log", highlight=True, markup=True, wrap=True)
@@ -432,6 +434,8 @@ class OttoSplattoApp(App):
             self._do_finish_upload()
         elif btn == "btn-view":
             self._do_view()
+        elif btn == "btn-clean":
+            self._do_clean_splat()
         elif btn == "btn-browse-input":
             self._browse_path("input-path", "Select Input (video or image folder)")
         elif btn == "btn-browse-output":
@@ -772,11 +776,46 @@ class OttoSplattoApp(App):
 
         if result["status"] == "success":
             self._ply_path = result.get("ply_path")
+
+            # ── Post-training: cleanup splat ──────────────────
+            if self._ply_path and os.path.isfile(self._ply_path):
+                self._log("")
+                self._log("[cyan]Running post-training cleanup…[/]")
+                from pipeline.cleanup import cleanup_splat
+                cleanup_result = cleanup_splat(self._ply_path, on_output=self._log)
+                if cleanup_result["status"] == "success":
+                    removed = cleanup_result["removed"]
+                    self._log(
+                        f"[green]✓ Cleanup: removed {removed['total']} gaussians "
+                        f"({cleanup_result['input_count']} → {cleanup_result['output_count']})[/]"
+                    )
+                    self._log(
+                        f"  invisible={removed['invisible']} needles={removed['needles']} "
+                        f"outliers={removed['outliers']} giants={removed['giants']}"
+                    )
+                    # Use the cleaned PLY going forward
+                    self._ply_path = cleanup_result["output_path"]
+                else:
+                    self._log(f"[yellow]Cleanup skipped: {cleanup_result.get('message', 'unknown error')}[/]")
+
+            # ── Post-training: generate manifest ──────────────
+            if self._ply_path and self.project_dir:
+                self._log("")
+                from pipeline.manifest import generate_manifest
+                manifest_result = generate_manifest(
+                    self.project_dir, self._ply_path, on_output=self._log
+                )
+                if manifest_result["status"] == "success":
+                    self._log(f"[green]✓ Manifest saved[/]")
+                else:
+                    self._log(f"[yellow]Manifest skipped: {manifest_result.get('message', '')}[/]")
+
             if self._ply_path:
                 try:
+                    ply_for_ui = self._ply_path
                     self.app.call_from_thread(
                         lambda: setattr(
-                            self.query_one("#ply-path", Input), "value", self._ply_path
+                            self.query_one("#ply-path", Input), "value", ply_for_ui
                         )
                     )
                 except Exception:
@@ -792,6 +831,51 @@ class OttoSplattoApp(App):
             self._switch_tab("tab-view")
         else:
             self._log(f"[red]Training failed: {result.get('message', result['status'])}[/]")
+
+    @work(thread=True)
+    def _do_clean_splat(self) -> None:
+        """Run cleanup on the current PLY file from the View tab."""
+        ply = self.query_one("#ply-path", Input).value.strip()
+        if not ply and self._ply_path:
+            ply = self._ply_path
+        if not ply:
+            self._log("[red]No PLY file specified[/]")
+            return
+        if not os.path.isfile(ply):
+            self._log(f"[red]PLY not found: {ply}[/]")
+            return
+
+        from pipeline.cleanup import cleanup_splat
+        self._log(f"Cleaning {ply}…")
+        result = cleanup_splat(ply, on_output=self._log)
+
+        if result["status"] == "success":
+            removed = result["removed"]
+            self._log(
+                f"[green]✓ Cleanup: removed {removed['total']} gaussians "
+                f"({result['input_count']} → {result['output_count']})[/]"
+            )
+            self._ply_path = result["output_path"]
+            try:
+                cleaned_path = result["output_path"]
+                self.app.call_from_thread(
+                    lambda: setattr(
+                        self.query_one("#ply-path", Input), "value", cleaned_path
+                    )
+                )
+            except Exception:
+                pass
+
+            # Also generate manifest if we have a project dir
+            if self.project_dir:
+                from pipeline.manifest import generate_manifest
+                manifest_result = generate_manifest(
+                    self.project_dir, self._ply_path, on_output=self._log
+                )
+                if manifest_result["status"] == "success":
+                    self._log(f"[green]✓ Manifest updated[/]")
+        else:
+            self._log(f"[red]Cleanup failed: {result.get('message', result['status'])}[/]")
 
     @work(thread=True)
     def _do_view(self) -> None:

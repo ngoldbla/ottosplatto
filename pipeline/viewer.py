@@ -24,13 +24,44 @@ VIEWER_HTML = r"""<!DOCTYPE html>
   }
   #hud h1 { margin:0 0 4px; font-size:15px; color:#f0f6fc; }
   #hud .dim { color:#8b949e; }
+  #hud-buttons {
+    position:absolute; top:12px; right:12px; z-index:10;
+    display:flex; gap:8px;
+  }
+  #hud-buttons button {
+    background:rgba(13,17,23,0.85); color:#58a6ff; border:1px solid #30363d;
+    border-radius:6px; padding:6px 12px; font-family:monospace; font-size:12px;
+    cursor:pointer;
+  }
+  #hud-buttons button:hover { background:rgba(48,54,61,0.9); color:#f0f6fc; }
+  #info-panel {
+    display:none; position:absolute; top:50px; right:12px; z-index:20;
+    background:rgba(13,17,23,0.95); color:#c9d1d9; border:1px solid #30363d;
+    border-radius:8px; padding:16px 20px; font-size:12px; line-height:1.8;
+    max-width:400px; max-height:70vh; overflow-y:auto;
+  }
+  #info-panel h2 { margin:8px 0 4px; font-size:13px; color:#58a6ff; }
+  #info-panel h2:first-child { margin-top:0; }
+  #info-panel .info-row { display:flex; justify-content:space-between; gap:16px; }
+  #info-panel .info-label { color:#8b949e; }
+  #info-panel .info-val { color:#f0f6fc; text-align:right; }
+  #info-panel a { color:#58a6ff; text-decoration:none; }
+  #info-panel a:hover { text-decoration:underline; }
 </style>
 </head>
 <body>
 <div id="hud">
   <h1>OttoSplatto Viewer</h1>
   <span id="status">Loading splat…</span><br>
-  <span class="dim">Drag=rotate · Scroll=zoom · Right-click=pan</span>
+  <span id="mode-hint" class="dim">Orbit mode — click canvas for FPS · Tab to toggle</span>
+</div>
+<div id="hud-buttons">
+  <button id="btn-info" title="Show scene info">Info</button>
+  <button id="btn-download" title="Download PLY">Download PLY</button>
+</div>
+<div id="info-panel">
+  <h2>Scene Info</h2>
+  <div id="info-content">Loading…</div>
 </div>
 <script type="importmap">
 {
@@ -44,9 +75,11 @@ VIEWER_HTML = r"""<!DOCTYPE html>
 <script type="module">
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { PointerLockControls } from 'three/addons/controls/PointerLockControls.js';
 import { SplatMesh } from '@sparkjsdev/spark';
 
 const statusEl = document.getElementById('status');
+const modeHintEl = document.getElementById('mode-hint');
 const plyFile = new URLSearchParams(location.search).get('ply') || 'point_cloud.ply';
 const plyUrl = new URL(plyFile, location.href).href;
 
@@ -60,14 +93,98 @@ renderer.setSize(innerWidth, innerHeight);
 renderer.setPixelRatio(devicePixelRatio);
 document.body.appendChild(renderer.domElement);
 
-const controls = new OrbitControls(camera, renderer.domElement);
-controls.enableDamping = true;
-controls.dampingFactor = 0.12;
+// ── Orbit Controls (default) ─────────────────────────────
+const orbitControls = new OrbitControls(camera, renderer.domElement);
+orbitControls.enableDamping = true;
+orbitControls.dampingFactor = 0.12;
+
+// ── FPS / Pointer Lock Controls ──────────────────────────
+const fpsControls = new PointerLockControls(camera, renderer.domElement);
+let fpsMode = false;
+let sceneRadius = 5; // updated after loading
+let moveSpeed = 1;   // base speed, updated from scene size
+
+// WASD + Space/Ctrl movement state
+const moveState = { forward:false, backward:false, left:false, right:false, up:false, down:false, fast:false };
+const moveVec = new THREE.Vector3();
+const clock = new THREE.Clock();
+
+function updateModeHint() {
+  if (fpsMode && fpsControls.isLocked) {
+    modeHintEl.textContent = 'FPS mode — WASD=move Shift=fast Space=up Ctrl=down Esc=orbit';
+  } else {
+    modeHintEl.textContent = 'Orbit mode — click canvas for FPS · Tab to toggle';
+  }
+}
+
+function enterFPS() {
+  fpsMode = true;
+  orbitControls.enabled = false;
+  fpsControls.lock();
+}
+
+function exitFPS() {
+  fpsMode = false;
+  orbitControls.enabled = true;
+  if (fpsControls.isLocked) fpsControls.unlock();
+  updateModeHint();
+}
+
+fpsControls.addEventListener('lock', () => {
+  fpsMode = true;
+  orbitControls.enabled = false;
+  updateModeHint();
+});
+
+fpsControls.addEventListener('unlock', () => {
+  fpsMode = false;
+  orbitControls.enabled = true;
+  updateModeHint();
+});
+
+// Click canvas to enter FPS
+renderer.domElement.addEventListener('click', () => {
+  if (!fpsMode && !fpsControls.isLocked) {
+    enterFPS();
+  }
+});
+
+// Tab toggles mode
+document.addEventListener('keydown', (e) => {
+  if (e.code === 'Tab') {
+    e.preventDefault();
+    if (fpsMode) { exitFPS(); } else { enterFPS(); }
+    return;
+  }
+  // WASD movement keys (only when FPS mode active)
+  if (!fpsControls.isLocked) return;
+  switch (e.code) {
+    case 'KeyW': moveState.forward = true; break;
+    case 'KeyS': moveState.backward = true; break;
+    case 'KeyA': moveState.left = true; break;
+    case 'KeyD': moveState.right = true; break;
+    case 'Space': moveState.up = true; e.preventDefault(); break;
+    case 'ControlLeft': case 'ControlRight': moveState.down = true; e.preventDefault(); break;
+    case 'ShiftLeft': case 'ShiftRight': moveState.fast = true; break;
+  }
+});
+
+document.addEventListener('keyup', (e) => {
+  switch (e.code) {
+    case 'KeyW': moveState.forward = false; break;
+    case 'KeyS': moveState.backward = false; break;
+    case 'KeyA': moveState.left = false; break;
+    case 'KeyD': moveState.right = false; break;
+    case 'Space': moveState.up = false; break;
+    case 'ControlLeft': case 'ControlRight': moveState.down = false; break;
+    case 'ShiftLeft': case 'ShiftRight': moveState.fast = false; break;
+  }
+});
 
 // Expose for debugging
 window.__scene = scene;
 window.__camera = camera;
-window.__controls = controls;
+window.__controls = orbitControls;
 
 function frameCamera(box) {
   if (!box || box.isEmpty()) {
@@ -77,15 +194,17 @@ function frameCamera(box) {
   const center = box.getCenter(new THREE.Vector3());
   const size = box.getSize(new THREE.Vector3());
   const radius = size.length() / 2;
+  sceneRadius = radius;
+  moveSpeed = radius / 5;
   // Position camera to see the whole scene: use FOV to compute distance
   const fov = camera.fov * (Math.PI / 180);
   const dist = radius / Math.sin(fov / 2);
-  controls.target.copy(center);
+  orbitControls.target.copy(center);
   camera.position.set(center.x, center.y + radius * 0.3, center.z + dist * 0.8);
   camera.near = dist * 0.01;
   camera.far = dist * 5;
   camera.updateProjectionMatrix();
-  controls.update();
+  orbitControls.update();
 }
 
 // SH DC coefficient to linear RGB
@@ -168,9 +287,32 @@ async function loadPointCloud(url) {
   return new THREE.Points(geom, mat);
 }
 
+// ── FPS movement in render loop ──────────────────────────
+function updateFPSMovement(delta) {
+  if (!fpsControls.isLocked) return;
+  const speed = moveSpeed * (moveState.fast ? 4 : 1) * delta;
+  moveVec.set(0, 0, 0);
+  if (moveState.forward) moveVec.z -= 1;
+  if (moveState.backward) moveVec.z += 1;
+  if (moveState.left) moveVec.x -= 1;
+  if (moveState.right) moveVec.x += 1;
+  if (moveVec.lengthSq() > 0) {
+    moveVec.normalize().multiplyScalar(speed);
+    fpsControls.moveRight(moveVec.x);
+    fpsControls.moveForward(-moveVec.z);
+  }
+  if (moveState.up) camera.position.y += speed;
+  if (moveState.down) camera.position.y -= speed;
+}
+
 // Start render loop immediately — Spark.js needs active rendering during init
 renderer.setAnimationLoop(() => {
-  controls.update();
+  const delta = clock.getDelta();
+  if (fpsMode) {
+    updateFPSMovement(delta);
+  } else {
+    orbitControls.update();
+  }
   renderer.render(scene, camera);
 });
 
@@ -178,6 +320,94 @@ addEventListener('resize', () => {
   camera.aspect = innerWidth / innerHeight;
   camera.updateProjectionMatrix();
   renderer.setSize(innerWidth, innerHeight);
+});
+
+// ── Info panel & download button ─────────────────────────
+const btnInfo = document.getElementById('btn-info');
+const btnDownload = document.getElementById('btn-download');
+const infoPanel = document.getElementById('info-panel');
+const infoContent = document.getElementById('info-content');
+
+btnInfo.addEventListener('click', () => {
+  infoPanel.style.display = infoPanel.style.display === 'none' ? 'block' : 'none';
+});
+
+// Build info panel content safely using DOM methods
+function buildInfoRow(parent, label, val) {
+  const row = document.createElement('div');
+  row.className = 'info-row';
+  const lbl = document.createElement('span');
+  lbl.className = 'info-label';
+  lbl.textContent = label;
+  const v = document.createElement('span');
+  v.className = 'info-val';
+  v.textContent = val;
+  row.appendChild(lbl);
+  row.appendChild(v);
+  parent.appendChild(row);
+}
+
+function buildInfoSection(parent, title) {
+  const h = document.createElement('h2');
+  h.textContent = title;
+  parent.appendChild(h);
+}
+
+// Try to load manifest.json from same directory as the PLY
+async function loadManifest() {
+  try {
+    const manifestUrl = new URL('manifest.json', plyUrl).href;
+    const resp = await fetch(manifestUrl);
+    if (!resp.ok) {
+      infoContent.textContent = 'No manifest.json found';
+      return;
+    }
+    const m = await resp.json();
+    infoContent.textContent = '';
+    buildInfoRow(infoContent, 'Software', m.software || '?');
+    buildInfoRow(infoContent, 'Created', m.created ? new Date(m.created).toLocaleString() : '?');
+    buildInfoRow(infoContent, 'Project', m.project_name || '?');
+    buildInfoRow(infoContent, 'Source Images', String(m.source_images || '?'));
+    if (m.colmap) {
+      buildInfoSection(infoContent, 'COLMAP');
+      buildInfoRow(infoContent, 'Camera Model', m.colmap.camera_model || '?');
+      buildInfoRow(infoContent, 'Matcher', m.colmap.matcher || '?');
+    }
+    if (m.training) {
+      buildInfoSection(infoContent, 'Training');
+      buildInfoRow(infoContent, 'Iterations', String(m.training.iterations || '?'));
+      buildInfoRow(infoContent, 'SH Degree', String(m.training.sh_degree ?? '?'));
+    }
+    if (m.output) {
+      buildInfoSection(infoContent, 'Output');
+      buildInfoRow(infoContent, 'Gaussians', (m.output.gaussian_count || 0).toLocaleString());
+      buildInfoRow(infoContent, 'PLY Size', (m.output.ply_size_mb || 0) + ' MB');
+    }
+    if (m.cleanup) {
+      buildInfoSection(infoContent, 'Cleanup');
+      buildInfoRow(infoContent, 'Original', (m.cleanup.original_count || 0).toLocaleString());
+      buildInfoRow(infoContent, 'Cleaned', (m.cleanup.cleaned_count || 0).toLocaleString());
+      buildInfoRow(infoContent, 'Removed', (m.cleanup.removed || 0).toLocaleString() + ' (' + (m.cleanup.removed_pct || 0) + '%)');
+    }
+    if (m.device) {
+      buildInfoSection(infoContent, 'Device');
+      buildInfoRow(infoContent, 'GPU', m.device.gpu_name || '?');
+      buildInfoRow(infoContent, 'CUDA', m.device.cuda_version || '?');
+    }
+  } catch(e) {
+    infoContent.textContent = 'Could not load manifest: ' + e.message;
+  }
+}
+loadManifest();
+
+// Download PLY link
+btnDownload.addEventListener('click', () => {
+  const a = document.createElement('a');
+  a.href = plyUrl;
+  a.download = plyFile;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
 });
 
 // Load splat with Spark.js
