@@ -73,8 +73,11 @@ ottosplatto/
 │   ├── reconstruct.py      # COLMAP sparse reconstruction
 │   ├── train.py            # 3DGS training wrapper
 │   └── viewer.py           # Web-based PLY point cloud viewer
-└── tui/
-    └── app.py              # Textual TUI application
+├── tui/
+│   └── app.py              # Textual TUI application
+└── tests/
+    ├── generate_test_scene.py  # Synthetic 3D scene generator (test rabbit)
+    └── run_validation.sh       # End-to-end pipeline validation
 ```
 
 ## Device Support
@@ -85,6 +88,23 @@ ottosplatto/
 | RTX 3090 (24 GB) | x86_64 | Ampere, sm_8.6 | 30K iters, SH 3 |
 | DGX Spark (128 GB) | aarch64 | Blackwell, sm_10.x | 30K iters, SH 4 |
 | Low-VRAM (<20 GB) | any | auto | 20K iters, SH 2 |
+
+## Test Rabbit
+
+A built-in synthetic 3D test scene that proves the full pipeline works without needing real video. Generates a textured room (checkerboard floor, patterned walls, scattered objects) rendered from 20 cameras on a circle — a scene that reliably reconstructs in COLMAP and trains in 3DGS.
+
+```bash
+# One command — generates test data, runs full pipeline, reports pass/fail
+./tests/run_validation.sh
+
+# Or generate the test scene separately
+python tests/generate_test_scene.py --output /tmp/my_test
+
+# Then run the pipeline on it
+python main.py run --name rabbit --input /tmp/my_test/images --output /tmp/my_test --iterations 500
+```
+
+The validation script checks every component: device detection, frame extraction, COLMAP reconstruction, 3DGS training, PLY output, and the web viewer. Runs in under a minute on a 4090.
 
 ## Development with Claude Code
 
