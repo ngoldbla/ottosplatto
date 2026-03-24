@@ -830,6 +830,11 @@ class OttoSplattoApp(App):
                     self._log(f"[yellow]⚠ transforms.json import failed: {result.get('message', '')}[/]")
                     self._log("[cyan]Falling back to COLMAP reconstruction[/]")
 
+            # Set train_source to project_dir as default — COLMAP will update
+            # it to the proper path (with sparse/0/) when reconstruction succeeds.
+            self._config["train_source"] = self.project_dir
+            self._save_config()
+
             # Auto-detect camera from EXIF and recommend settings
             from pipeline.exif_detect import detect_camera
             detection = detect_camera(os.path.join(self.project_dir, "images"), on_output=self._log)
@@ -986,35 +991,42 @@ class OttoSplattoApp(App):
             self._copyparty_proc = None
 
         # Sort uploaded files: images → images/, special files → project root
-        # Phone uploads may flatten everything into one directory
+        # Phone uploads may flatten everything into one directory or create
+        # arbitrary subdirs.  We must move ALL files out before cleaning dirs.
         SPECIAL_FILES = {"transforms.json", "pointcloud.ply", "point_cloud.ply"}
+        KEEP_DIRS = {"images", "output", "sparse"}
         project_root = self.project_dir
 
-        # Walk all files in the project dir and sort them
+        # 1) Recursively collect every file NOT already in images/, output/, sparse/
+        files_to_sort: list[tuple[str, str]] = []  # (src_path, filename)
         for root, dirs, files in os.walk(project_root):
-            # Skip .hist (copyparty metadata), output, sparse dirs
-            dirs[:] = [d for d in dirs if d not in {".hist", "output", "sparse"}]
+            rel = os.path.relpath(root, project_root)
+            # Skip walking into the protected dirs entirely
+            dirs[:] = [d for d in dirs if not (
+                rel == "." and d in KEEP_DIRS
+            )]
             for f in files:
-                src = os.path.join(root, f)
-                ext = os.path.splitext(f)[1].lower()
-                fname_lower = f.lower()
+                files_to_sort.append((os.path.join(root, f), f))
 
-                if fname_lower in SPECIAL_FILES:
-                    # Special files go to project root
-                    dst = os.path.join(project_root, f)
-                    if src != dst:
-                        shutil.move(src, dst)
-                        self._log(f"[green]Found {f}[/]")
-                elif ext in IMAGE_EXTS:
-                    # Images go to images/
-                    dst = os.path.join(images_dir, f)
-                    if src != dst and not os.path.exists(dst):
-                        shutil.move(src, dst)
+        # 2) Move files to their proper locations
+        for src, f in files_to_sort:
+            ext = os.path.splitext(f)[1].lower()
+            fname_lower = f.lower()
 
-        # Clean up empty subdirs (except images/, output/, sparse/)
+            if fname_lower in SPECIAL_FILES:
+                dst = os.path.join(project_root, f)
+                if src != dst:
+                    shutil.move(src, dst)
+                    self._log(f"[green]Found {f}[/]")
+            elif ext in IMAGE_EXTS:
+                dst = os.path.join(images_dir, f)
+                if src != dst and not os.path.exists(dst):
+                    shutil.move(src, dst)
+
+        # 3) Clean up any non-standard subdirs (now safe — files already moved)
         for d in os.listdir(project_root):
             dp = os.path.join(project_root, d)
-            if os.path.isdir(dp) and d not in {"images", "output", "sparse", ".hist"}:
+            if os.path.isdir(dp) and d not in KEEP_DIRS:
                 try:
                     shutil.rmtree(dp)
                 except Exception:

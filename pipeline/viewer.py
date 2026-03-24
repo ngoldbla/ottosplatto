@@ -507,7 +507,22 @@ def _open_browser(url: str, on_output: Optional[Callable[[str], None]] = None) -
                     stderr=subprocess.DEVNULL,
                 )
                 return
-    webbrowser.open(url)
+    # Don't use webbrowser.open() — it may write to stderr and corrupt
+    # Textual's terminal display.  Try common browsers via subprocess with
+    # stdout/stderr suppressed, then fall back to xdg-open.
+    for name in ("xdg-open", "chromium-browser", "chromium", "google-chrome", "google-chrome-stable", "firefox"):
+        path = shutil.which(name)
+        if path:
+            subprocess.Popen(
+                [path, url],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+            return
+    # Last resort: use webbrowser.open with stderr suppressed
+    import contextlib, io
+    with contextlib.redirect_stderr(io.StringIO()):
+        webbrowser.open(url)
 
 
 def launch_viewer(
