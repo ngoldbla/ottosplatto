@@ -714,11 +714,12 @@ class OttoSplattoApp(App):
         except Exception:
             pass
 
-        # Start copyparty serving the project's images directory
-        self._log(f"Starting upload server for {images_dir}")
+        # Start copyparty serving the project root (not just images/)
+        # This way transforms.json and pointcloud.ply land at the right level
+        self._log(f"Starting upload server for {self.project_dir}")
         try:
             self._copyparty_proc = subprocess.Popen(
-                ["copyparty", "-v", f"{images_dir}::rw", "--http-only", "-p", "3210", "-q"],
+                ["copyparty", "-v", f"{self.project_dir}::rw", "--http-only", "-p", "3210", "-q"],
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
             )
@@ -793,29 +794,40 @@ class OttoSplattoApp(App):
                 pass
             self._copyparty_proc = None
 
-        # Flatten any subdirectories — phone uploads often create nested folders
-        for root, dirs, files in os.walk(images_dir):
-            if root == images_dir:
-                continue
-            for f in files:
-                if os.path.splitext(f)[1].lower() in IMAGE_EXTS:
-                    src = os.path.join(root, f)
-                    dst = os.path.join(images_dir, f)
-                    if not os.path.exists(dst):
-                        shutil.move(src, dst)
-        # Remove empty subdirs
-        for d in os.listdir(images_dir):
-            dp = os.path.join(images_dir, d)
-            if os.path.isdir(dp):
-                shutil.rmtree(dp, ignore_errors=True)
+        # Sort uploaded files: images → images/, special files → project root
+        # Phone uploads may flatten everything into one directory
+        SPECIAL_FILES = {"transforms.json", "pointcloud.ply", "point_cloud.ply"}
+        project_root = self.project_dir
 
-        # Also check for transforms.json (app-provided camera poses)
-        for root, dirs, files in os.walk(self.project_dir):
-            if "transforms.json" in files and root != self.project_dir:
-                src = os.path.join(root, "transforms.json")
-                shutil.copy2(src, os.path.join(self.project_dir, "transforms.json"))
-                self._log("[green]Found transforms.json — camera poses provided by capture app[/]")
-                break
+        # Walk all files in the project dir and sort them
+        for root, dirs, files in os.walk(project_root):
+            # Skip .hist (copyparty metadata), output, sparse dirs
+            dirs[:] = [d for d in dirs if d not in {".hist", "output", "sparse"}]
+            for f in files:
+                src = os.path.join(root, f)
+                ext = os.path.splitext(f)[1].lower()
+                fname_lower = f.lower()
+
+                if fname_lower in SPECIAL_FILES:
+                    # Special files go to project root
+                    dst = os.path.join(project_root, f)
+                    if src != dst:
+                        shutil.move(src, dst)
+                        self._log(f"[green]Found {f}[/]")
+                elif ext in IMAGE_EXTS:
+                    # Images go to images/
+                    dst = os.path.join(images_dir, f)
+                    if src != dst and not os.path.exists(dst):
+                        shutil.move(src, dst)
+
+        # Clean up empty subdirs (except images/, output/, sparse/)
+        for d in os.listdir(project_root):
+            dp = os.path.join(project_root, d)
+            if os.path.isdir(dp) and d not in {"images", "output", "sparse", ".hist"}:
+                try:
+                    shutil.rmtree(dp)
+                except Exception:
+                    pass
 
         # Final image count
         try:
