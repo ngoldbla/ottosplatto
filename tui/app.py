@@ -238,6 +238,8 @@ class OttoSplattoApp(App):
         Binding("q", "quit", "Quit"),
         Binding("d", "toggle_dark", "Theme"),
         Binding("ctrl+c", "cancel_job", "Cancel"),
+        Binding("plus,equal", "grow_log", "Log+", show=True),
+        Binding("minus,underscore", "shrink_log", "Log-", show=True),
     ]
 
     def __init__(self, project_dir: str = None):
@@ -498,6 +500,26 @@ class OttoSplattoApp(App):
     def action_cancel_job(self) -> None:
         self._cancel = True
         self._log("[yellow]Cancel requested…[/]")
+
+    def action_grow_log(self) -> None:
+        """Increase log panel height."""
+        panel = self.query_one("#log-panel")
+        current = panel.styles.height
+        if current is not None and hasattr(current, 'value'):
+            new_val = min(current.value + 4, 80)
+            panel.styles.height = new_val
+        else:
+            panel.styles.height = 20
+
+    def action_shrink_log(self) -> None:
+        """Decrease log panel height."""
+        panel = self.query_one("#log-panel")
+        current = panel.styles.height
+        if current is not None and hasattr(current, 'value'):
+            new_val = max(current.value - 4, 6)
+            panel.styles.height = new_val
+        else:
+            panel.styles.height = 10
 
     # ── button dispatch ──────────────────────────────────────
 
