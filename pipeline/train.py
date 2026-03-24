@@ -19,6 +19,11 @@ SEARCH_PATHS_2DGS = [
     os.path.expanduser("~/.ottosplatto/2d-gaussian-splatting"),
 ]
 
+SEARCH_PATHS_GSPLAT = [
+    os.path.expanduser("~/.ottosplatto/gsplat"),
+    os.path.expanduser("~/gsplat"),
+]
+
 DEFAULT_CONDA_ENV = "gs_original"
 
 
@@ -129,7 +134,18 @@ def train(
     on_output: Optional[Callable[[str], None]] = None,
     check_cancel: Optional[Callable[[], bool]] = None,
 ) -> dict:
-    """Run Gaussian Splatting training via the original 3DGS or 2DGS train.py."""
+    """Run Gaussian Splatting training via original 3DGS, 2DGS, or gsplat."""
+    if method == "gsplat":
+        if on_output:
+            on_output("⭐ Using gsplat MCMC (best quality — appearance opt, anti-aliasing, 4x less VRAM)")
+        if conda_env == DEFAULT_CONDA_ENV:
+            conda_env = "gs_gsplat"
+        # gsplat uses its own simple_trainer.py
+        return _train_gsplat(
+            source_dir, output_dir, iterations, sh_degree,
+            conda_env, env_override, on_output, check_cancel,
+        )
+
     if method == "2dgs":
         if on_output:
             on_output("Using 2D Gaussian Splatting (better surfaces, fewer artifacts)")
@@ -197,6 +213,10 @@ def train(
         on_output(f"$ {' '.join(cmd)}")
         on_output(f"Training {iterations} iterations — this will take a few minutes…")
 
+    # Log initial GPU state
+    from pipeline.gpu_monitor import log_gpu_stats
+    log_gpu_stats(on_output)
+
     env = os.environ.copy()
     env["CUDA_VISIBLE_DEVICES"] = env.get("CUDA_VISIBLE_DEVICES", "0")
     if env_override:
@@ -209,6 +229,8 @@ def train(
 
     t_start = time.monotonic()
     last_report_iter = 0
+    last_gpu_report = t_start
+    gpu_report_interval = 30  # Report GPU stats every 30 seconds
     report_every = max(500, iterations // 20)  # ~20 progress updates
     loss_history = []
 
@@ -232,6 +254,11 @@ def train(
             last_report_iter = progress.get("iter", last_report_iter)
             if progress.get("loss") is not None:
                 loss_history.append((progress["iter"], progress["loss"]))
+            # Periodic GPU stats alongside progress
+            now = time.monotonic()
+            if now - last_gpu_report >= gpu_report_interval:
+                log_gpu_stats(on_output)
+                last_gpu_report = now
         elif on_output and ("error" in s.lower() or "warning" in s.lower() or "saving" in s.lower()):
             on_output(f"  {s}")
 
@@ -246,6 +273,118 @@ def train(
 
     # Locate output PLY
     ply_files = sorted(glob.glob(
+        os.path.join(output_dir, "point_cloud", "iteration_*", "point_cloud.ply")
+    ))
+    final_ply = ply_files[-1] if ply_files else None
+
+    if on_output:
+        if final_ply:
+            size_mb = os.path.getsize(final_ply) / (1024 * 1024)
+            on_output(f"Training complete — {final_ply} ({size_mb:.1f} MB)")
+        else:
+            on_output("Training finished but no PLY produced")
+
+    return {
+        "status": "success",
+        "ply_path": final_ply,
+        "output_dir": output_dir,
+        "loss_history": loss_history,
+    }
+
+
+def _train_gsplat(
+    source_dir: str,
+    output_dir: str,
+    iterations: int = 40000,
+    sh_degree: int = 3,
+    conda_env: str = "gs_gsplat",
+    env_override: Optional[dict] = None,
+    on_output: Optional[Callable[[str], None]] = None,
+    check_cancel: Optional[Callable[[], bool]] = None,
+) -> dict:
+    """Train using gsplat's simple_trainer with MCMC strategy."""
+    # gsplat's simple_trainer.py is installed as part of the gsplat package
+    # It reads COLMAP format directly from a data directory
+    cmd = [
+        "conda", "run", "-n", conda_env,
+        "python", "-u", "-m", "gsplat.examples.simple_trainer",
+        "mcmc",
+        "--data_dir", source_dir,
+        "--data_factor", "1",
+        "--max_steps", str(iterations),
+        "--result_dir", output_dir,
+        "--cap_max", "2000000",
+        "--sh_degree", str(sh_degree),
+        "--ssim_lambda", "0.2",
+        "--opacity_reg", "0.01",
+        "--scale_reg", "0.01",
+        "--antialiased",
+    ]
+
+    if on_output:
+        on_output(f"$ {' '.join(cmd)}")
+        on_output(f"Training {iterations} steps with gsplat MCMC…")
+
+    from pipeline.gpu_monitor import log_gpu_stats
+    log_gpu_stats(on_output)
+
+    env = os.environ.copy()
+    env["CUDA_VISIBLE_DEVICES"] = env.get("CUDA_VISIBLE_DEVICES", "0")
+    if env_override:
+        env.update(env_override)
+
+    process = subprocess.Popen(
+        cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+        text=True, bufsize=1, env=env,
+    )
+
+    t_start = time.monotonic()
+    last_report_iter = 0
+    last_gpu_report = t_start
+    gpu_report_interval = 30
+    report_every = max(500, iterations // 20)
+    loss_history = []
+
+    for line in iter(process.stdout.readline, ""):
+        if check_cancel and check_cancel():
+            process.terminate()
+            process.wait()
+            return {"status": "cancelled"}
+
+        s = line.strip()
+        if not s:
+            continue
+
+        # gsplat progress format: "Step 5000/40000, Loss: 0.0234, PSNR: 28.5, ..."
+        # or tqdm: "|5000/40000|"
+        progress = _parse_training_line(s, iterations, last_report_iter, report_every, t_start)
+        if progress:
+            if on_output:
+                on_output(progress["msg"])
+            last_report_iter = progress.get("iter", last_report_iter)
+            if progress.get("loss") is not None:
+                loss_history.append((progress["iter"], progress["loss"]))
+            now = time.monotonic()
+            if now - last_gpu_report >= gpu_report_interval:
+                log_gpu_stats(on_output)
+                last_gpu_report = now
+        elif on_output and ("error" in s.lower() or "saving" in s.lower() or "psnr" in s.lower()):
+            on_output(f"  {s}")
+
+    process.wait()
+
+    if on_output:
+        elapsed = time.monotonic() - t_start
+        on_output(f"  Training finished in {elapsed/60:.1f} minutes")
+        log_gpu_stats(on_output)
+
+    if process.returncode != 0:
+        return {"status": "error", "returncode": process.returncode}
+
+    # gsplat saves PLY in result_dir
+    ply_files = sorted(glob.glob(os.path.join(output_dir, "**", "*.ply"), recursive=True))
+    # Also check the standard 3DGS output path
+    ply_files += sorted(glob.glob(
         os.path.join(output_dir, "point_cloud", "iteration_*", "point_cloud.ply")
     ))
     final_ply = ply_files[-1] if ply_files else None

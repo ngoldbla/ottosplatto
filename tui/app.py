@@ -238,8 +238,9 @@ class OttoSplattoApp(App):
         Binding("q", "quit", "Quit"),
         Binding("d", "toggle_dark", "Theme"),
         Binding("ctrl+c", "cancel_job", "Cancel"),
-        Binding("bracketright", "grow_log", "Log+", show=True),
-        Binding("bracketleft", "shrink_log", "Log-", show=True),
+        Binding("ctrl+up", "grow_log", "Ctrl+↑ Log+", show=True),
+        Binding("ctrl+down", "shrink_log", "Ctrl+↓ Log-", show=True),
+        Binding("ctrl+l", "save_log", "Ctrl+L Save Log", show=True),
     ]
 
     def __init__(self, project_dir: str = None):
@@ -338,14 +339,17 @@ class OttoSplattoApp(App):
             with TabPane("Train", id="tab-train"):
                 yield Label("Training Method", classes="form-label")
                 yield Select[str](
-                    [("Original 3DGS (fast, good quality)", "original"),
-                     ("2D Gaussian Splatting (better surfaces, fewer artifacts)", "2dgs")],
-                    value="2dgs", id="train-method",
+                    [("⭐ gsplat MCMC (best quality, recommended)", "gsplat"),
+                     ("2D Gaussian Splatting (better surfaces, fewer artifacts)", "2dgs"),
+                     ("Original 3DGS (fast, compatible)", "original")],
+                    value="gsplat", id="train-method",
                 )
                 yield Static(
-                    "Original 3DGS — Fast training, good general quality. May produce floaters and needles.\n"
-                    "2D Gaussian Splatting — Better surface reconstruction, fewer artifacts. "
-                    "Recommended for emergency response scenes with structures and terrain.",
+                    "⭐ gsplat MCMC — Best quality. MCMC densification, appearance optimization, "
+                    "anti-aliasing, 4x less VRAM. Recommended for all scenes.\n"
+                    "2D Gaussian Splatting — Better surface reconstruction with 2D discs. "
+                    "Good for structures and terrain.\n"
+                    "Original 3DGS — Fast, widely compatible. May produce floaters and needles.",
                     classes="help-text",
                 )
                 yield Label("Iterations", classes="form-label")
@@ -367,15 +371,16 @@ class OttoSplattoApp(App):
                 )
                 yield Label("Conda Environment", classes="form-label")
                 yield Select[str](
-                    [("gs_original (Original 3DGS)", "gs_original"),
+                    [("⭐ gs_gsplat (gsplat MCMC — recommended)", "gs_gsplat"),
                      ("gs_2dgs (2D Gaussian Splatting)", "gs_2dgs"),
+                     ("gs_original (Original 3DGS)", "gs_original"),
                      ("gs_nerfstudio (Splatfacto)", "gs_nerfstudio"),
                      ("gs_dn_splatter (DN-Splatter)", "gs_dn_splatter"),
                      ("gs_g3splat (G3Splat)", "gs_g3splat"),
                      ("gs_vicasplat (VicaSplat)", "gs_vicasplat"),
                      ("gs_efa (EFA-GS)", "gs_efa"),
                      ("gs_depth (Depth-GS)", "gs_depth")],
-                    value="gs_2dgs", id="conda-env",
+                    value="gs_gsplat", id="conda-env",
                 )
                 yield Static(
                     "Auto-selected based on training method. Override only if needed.",
@@ -535,6 +540,29 @@ class OttoSplattoApp(App):
             panel.styles.height = new_val
         else:
             panel.styles.height = 10
+
+    def action_save_log(self) -> None:
+        """Save the log contents to a file for copy/paste troubleshooting."""
+        log_file = os.path.join(self.project_dir or os.path.expanduser("~"), "ottosplatto_log.txt")
+        try:
+            log_widget = self.query_one("#log", RichLog)
+            # RichLog stores lines internally — extract them
+            lines = []
+            for line in log_widget.lines:
+                lines.append(line.text if hasattr(line, 'text') else str(line))
+            with open(log_file, "w") as f:
+                f.write("\n".join(lines))
+            self._log(f"[green]✓ Log saved to {log_file}[/]")
+            self._log(f"  Run: cat {log_file}")
+        except Exception as e:
+            # Fallback: write what we can
+            log_file = os.path.expanduser("~/ottosplatto_log.txt")
+            try:
+                with open(log_file, "w") as f:
+                    f.write(f"Log save error: {e}\nCheck the TUI for details.\n")
+                self._log(f"[yellow]Log partially saved to {log_file}[/]")
+            except Exception:
+                self._log(f"[red]Could not save log: {e}[/]")
 
     # ── button dispatch ──────────────────────────────────────
 
@@ -1040,8 +1068,10 @@ class OttoSplattoApp(App):
         sh_degree = int(self.query_one("#sh-degree", Input).value or "3")
         method = self.query_one("#train-method", Select).value
         conda_env = self.query_one("#conda-env", Select).value
-        if method == "2dgs":
-            conda_env = "gs_2dgs"
+        # Auto-set conda env based on method
+        method_env_map = {"gsplat": "gs_gsplat", "2dgs": "gs_2dgs", "original": "gs_original"}
+        if method in method_env_map:
+            conda_env = method_env_map[method]
 
         self._log(f"Training {iterations} iterations (SH {sh_degree}) method='{method}' env='{conda_env}'…")
 
