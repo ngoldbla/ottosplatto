@@ -36,6 +36,9 @@ def cleanup_splat(
 
     if output_ply is None:
         base, ext = os.path.splitext(input_ply)
+        # Strip any existing _cleaned suffix to avoid stacking
+        while base.endswith("_cleaned"):
+            base = base[: -len("_cleaned")]
         output_ply = f"{base}_cleaned{ext}"
 
     log = on_output or (lambda _: None)

@@ -139,10 +139,15 @@ def cmd_train(args):
     iterations = args.iterations if args.iterations != 30000 else td.get("iterations", 30000)
     sh_degree = args.sh_degree if args.sh_degree != 3 else td.get("sh_degree", 3)
 
+    method = getattr(args, "method", "gsplat")
+    conda_env = args.conda_env
+    if conda_env is None:
+        conda_env = {"gsplat": "gs_gsplat", "2dgs": "gs_2dgs", "original": "gs_original"}.get(method, "gs_gsplat")
+
     result = train(
         source_dir=source, output_dir=output,
         iterations=iterations, sh_degree=sh_degree,
-        conda_env=args.conda_env,
+        conda_env=conda_env, method=method,
         env_override=env_override,
         on_output=_log,
     )
@@ -190,8 +195,27 @@ def cmd_run(args):
     _log("\n━━━ EXTRACT ━━━")
     cmd_extract(args)
 
-    _log("\n━━━ RECONSTRUCT ━━━")
-    cmd_reconstruct(args)
+    # Check for transforms.json (app-provided camera poses — skip COLMAP)
+    from pipeline.transforms_import import detect_transforms, import_transforms
+    config = _load_config(project_dir)
+    input_path = config.get("input_path", "")
+    tf_path = detect_transforms(project_dir) or detect_transforms(input_path)
+    if tf_path:
+        _log("\n━━━ IMPORT POSES (skipping COLMAP) ━━━")
+        tf_dir = os.path.dirname(tf_path)
+        result = import_transforms(tf_dir, project_dir, on_output=_log)
+        if result["status"] == "success":
+            config["train_source"] = result["train_source"]
+            config["has_transforms"] = True
+            _update_steps(project_dir, "colmap")
+            _save_config(project_dir, config)
+        else:
+            _log(f"⚠ Import failed: {result.get('message', '')}, falling back to COLMAP")
+            _log("\n━━━ RECONSTRUCT ━━━")
+            cmd_reconstruct(args)
+    else:
+        _log("\n━━━ RECONSTRUCT ━━━")
+        cmd_reconstruct(args)
 
     _log("\n━━━ TRAIN ━━━")
     cmd_train(args)
@@ -269,7 +293,10 @@ def main():
     p.add_argument("--project", required=True)
     p.add_argument("--iterations", type=int, default=30000)
     p.add_argument("--sh-degree", type=int, default=3)
-    p.add_argument("--conda-env", default="gs_original")
+    p.add_argument("--method", default="gsplat", choices=["gsplat", "original", "2dgs"],
+                   help="Training method (default: gsplat)")
+    p.add_argument("--conda-env", default=None,
+                   help="Override conda env (default: auto from method)")
     p.add_argument("--gpu", type=str, default=None, help="CUDA device index (e.g. 0, 0,1)")
 
     # view
@@ -290,7 +317,8 @@ def main():
     p.add_argument("--no-undistort", action="store_true")
     p.add_argument("--iterations", type=int, default=30000)
     p.add_argument("--sh-degree", type=int, default=3)
-    p.add_argument("--conda-env", default="gs_original")
+    p.add_argument("--method", default="gsplat", choices=["gsplat", "original", "2dgs"])
+    p.add_argument("--conda-env", default=None)
     p.add_argument("--gpu", type=str, default=None)
 
     args = parser.parse_args()
