@@ -238,8 +238,8 @@ class OttoSplattoApp(App):
         Binding("q", "quit", "Quit"),
         Binding("d", "toggle_dark", "Theme"),
         Binding("ctrl+c", "cancel_job", "Cancel"),
-        Binding("plus,equal", "grow_log", "Log+", show=True),
-        Binding("minus,underscore", "shrink_log", "Log-", show=True),
+        Binding("bracketright", "grow_log", "Log+", show=True),
+        Binding("bracketleft", "shrink_log", "Log-", show=True),
     ]
 
     def __init__(self, project_dir: str = None):
@@ -615,9 +615,28 @@ class OttoSplattoApp(App):
             self._save_config()
 
             self._log(
-                f"[green]{num_images} images detected[/] — skipping frame extraction, "
-                f"advancing to reconstruction"
+                f"[green]{num_images} images detected[/] — skipping frame extraction"
             )
+
+            # Check for transforms.json (app-provided camera poses — skip COLMAP)
+            from pipeline.transforms_import import detect_transforms, import_transforms
+            tf_path = detect_transforms(input_path)
+            if tf_path:
+                self._log("[bold green]✓ transforms.json found — camera poses provided by capture app![/]")
+                self._log("[cyan]Importing poses and skipping COLMAP entirely…[/]")
+                result = import_transforms(input_path, self.project_dir, on_output=self._log)
+                if result["status"] == "success":
+                    self._config["train_source"] = result["train_source"]
+                    if "colmap" not in self._config["steps_completed"]:
+                        self._config["steps_completed"].append("colmap")
+                    self._config["has_transforms"] = True
+                    self._save_config()
+                    self._log(f"[bold green]✓ Ready for training — {result['num_images']} images with poses[/]")
+                    self._switch_tab("tab-train")
+                    return
+                else:
+                    self._log(f"[yellow]⚠ transforms.json import failed: {result.get('message', '')}[/]")
+                    self._log("[cyan]Falling back to COLMAP reconstruction[/]")
 
             # Auto-detect camera from EXIF and recommend settings
             from pipeline.exif_detect import detect_camera
@@ -631,10 +650,10 @@ class OttoSplattoApp(App):
                 self.app.call_later(
                     lambda v=matcher_val: setattr(self.query_one("#matcher", Select), "value", v)
                 )
-                # Save single_camera detection to project config
                 self._config["single_camera"] = detection.get("single_camera", False)
                 self._save_config()
 
+            self._log("[cyan]Advancing to Reconstruct tab[/]")
             self._switch_tab("tab-reconstruct")
 
     @work(thread=True)
@@ -858,6 +877,24 @@ class OttoSplattoApp(App):
         )
 
         if final_count > 0:
+            # Check for transforms.json (app-provided poses — skip COLMAP)
+            from pipeline.transforms_import import detect_transforms, import_transforms
+            tf_path = detect_transforms(self.project_dir) or detect_transforms(images_dir)
+            if tf_path:
+                self._log("[bold green]✓ transforms.json found — camera poses from capture app![/]")
+                self._log("[cyan]Importing poses — COLMAP will be skipped[/]")
+                tf_dir = os.path.dirname(tf_path)
+                result = import_transforms(tf_dir, self.project_dir, on_output=self._log)
+                if result["status"] == "success":
+                    self._config["train_source"] = result["train_source"]
+                    if "colmap" not in self._config.get("steps_completed", []):
+                        self._config.setdefault("steps_completed", []).append("colmap")
+                    self._config["has_transforms"] = True
+                    self._save_config()
+                    self._log(f"[bold green]✓ Ready for training![/] {final_count} images with poses → advancing to Train")
+                    self._switch_tab("tab-train")
+                    return
+
             self._log(f"[bold green]Ready to reconstruct![/] {final_count} images → advancing to Reconstruct tab")
             self._switch_tab("tab-reconstruct")
         else:

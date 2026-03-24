@@ -1,0 +1,9 @@
+{
+  "name": "dino",
+  "input_path": "home/dylan/splats/dino/dino/images",
+  "input_type": "images",
+  "steps_completed": [
+    "extract"
+  ],
+  "num_frames": 17
+}
