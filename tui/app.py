@@ -679,13 +679,34 @@ class OttoSplattoApp(App):
         self._save_config()
         self._set_status(f"Project: {self.project_dir}")
 
-        # Start copyparty
+        # Kill any existing process on port 3210 to avoid conflicts
+        try:
+            result = subprocess.run(
+                ["lsof", "-ti", ":3210"], capture_output=True, text=True
+            )
+            if result.stdout.strip():
+                for pid in result.stdout.strip().split():
+                    try:
+                        os.kill(int(pid), 9)
+                    except (ProcessLookupError, ValueError):
+                        pass
+                time.sleep(1)
+                self._log("[yellow]Killed existing process on port 3210[/]")
+        except Exception:
+            pass
+
+        # Start copyparty serving the project's images directory
+        self._log(f"Starting upload server for {images_dir}")
         try:
             self._copyparty_proc = subprocess.Popen(
                 ["copyparty", "-v", f"{images_dir}::rw", "--http-only", "-p", "3210", "-q"],
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
             )
+            time.sleep(2)  # Give copyparty time to bind the port
+            if self._copyparty_proc.poll() is not None:
+                self._log("[red]copyparty failed to start (port 3210 may be in use)[/]")
+                return
         except FileNotFoundError:
             self._log("[red]copyparty not found — install with: pip install copyparty[/]")
             return
