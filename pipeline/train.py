@@ -303,11 +303,22 @@ def _train_gsplat(
     check_cancel: Optional[Callable[[], bool]] = None,
 ) -> dict:
     """Train using gsplat's simple_trainer with MCMC strategy."""
-    # gsplat's simple_trainer.py is installed as part of the gsplat package
-    # It reads COLMAP format directly from a data directory
+    # Find gsplat simple_trainer.py
+    trainer_script = None
+    for path in SEARCH_PATHS_GSPLAT:
+        candidate = os.path.join(path, "examples", "simple_trainer.py")
+        if os.path.isfile(candidate):
+            trainer_script = candidate
+            break
+
+    if trainer_script is None:
+        return {
+            "status": "error",
+            "message": "gsplat trainer not found. Run: git clone https://github.com/nerfstudio-project/gsplat.git ~/.ottosplatto/gsplat",
+        }
+
     cmd = [
-        "conda", "run", "-n", conda_env,
-        "python", "-u", "-m", "gsplat.examples.simple_trainer",
+        "python", "-u", trainer_script,
         "mcmc",
         "--data_dir", source_dir,
         "--data_factor", "1",
