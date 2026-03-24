@@ -8,9 +8,14 @@ from typing import Optional, Callable
 def _get_colmap_version() -> tuple:
     """Get COLMAP version as (major, minor)."""
     result = subprocess.run(
-        ["colmap", "--version"], capture_output=True, text=True,
+        ["colmap", "help"], capture_output=True, text=True,
     )
     output = result.stdout + result.stderr
+    # Match "COLMAP X.Y" at the start of help output
+    match = re.search(r"COLMAP\s+(\d+)\.(\d+)", output)
+    if match:
+        return (int(match.group(1)), int(match.group(2)))
+    # Fallback: any version-like pattern
     match = re.search(r"(\d+)\.(\d+)", output)
     if match:
         return (int(match.group(1)), int(match.group(2)))

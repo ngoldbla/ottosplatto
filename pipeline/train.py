@@ -336,6 +336,18 @@ def _train_gsplat(
         "--disable-video",
     ]
 
+    # Quality features that need more iterations to converge (>10K steps)
+    if iterations >= 10000:
+        cmd.extend([
+            # Appearance optimization handles per-image exposure/white-balance variation
+            "--app-opt",
+            # Bilateral grid post-processing for color correction (phone captures)
+            "--post-processing", "bilateral_grid",
+            "--bilateral-grid-fused",
+            # Camera pose refinement — corrects small pose errors from SfM/LiDAR
+            "--pose-opt",
+        ])
+
     if on_output:
         on_output(f"$ {' '.join(cmd)}")
         on_output(f"Training {iterations} steps with gsplat MCMC…")

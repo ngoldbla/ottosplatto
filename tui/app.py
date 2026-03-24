@@ -612,12 +612,22 @@ class OttoSplattoApp(App):
         self._show_project_info()
         self._log(f"[green]Loaded project:[/] {self.project_dir}")
 
-        # Pre-fill PLY path if training output exists
+        # Pre-fill PLY path if training output exists (check both gsplat and original 3DGS formats)
         plys = sorted(glob_module.glob(
             os.path.join(project_dir, "output", "point_cloud", "iteration_*", "point_cloud.ply")
         ))
+        # gsplat saves to output/ply/point_cloud_<step>.ply
+        plys += sorted(glob_module.glob(
+            os.path.join(project_dir, "output", "ply", "point_cloud_*.ply")
+        ))
+        # Also check for cleaned PLY
+        plys += sorted(glob_module.glob(
+            os.path.join(project_dir, "output", "**", "*_cleaned.ply"), recursive=True
+        ))
         if plys:
-            self._ply_path = plys[-1]
+            # Prefer cleaned > latest original
+            cleaned = [p for p in plys if "_cleaned" in p]
+            self._ply_path = cleaned[-1] if cleaned else plys[-1]
             try:
                 self.query_one("#ply-path", Input).value = self._ply_path
             except Exception:
