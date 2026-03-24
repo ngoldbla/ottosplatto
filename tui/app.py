@@ -838,7 +838,6 @@ class OttoSplattoApp(App):
             self._log("[cyan]Advancing to Reconstruct tab[/]")
             self._switch_tab("tab-reconstruct")
 
-    @work(thread=True)
     def _do_load_project(self) -> None:
         """Open a directory picker to find a project, then load it."""
         output_dir = self.query_one("#output-dir", Input).value.strip()
@@ -847,7 +846,6 @@ class OttoSplattoApp(App):
         def _on_selected(path: str) -> None:
             if not path:
                 return
-            # Check if the selected dir has project.json, or look one level up
             if os.path.isfile(os.path.join(path, "project.json")):
                 self._load_project(path)
             else:
