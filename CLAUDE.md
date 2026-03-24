@@ -33,9 +33,10 @@ These must be installed on the host before the pipeline will work:
 
 - **FFmpeg** — frame extraction (`ffmpeg`, `ffprobe`)
 - **COLMAP** — sparse reconstruction (v3.x or v4.x; version-aware flag handling in reconstruct.py)
-- **conda** — manages the `gs_original` environment for 3DGS training
-- **NVIDIA driver + CUDA toolkit** — GPU acceleration for COLMAP and training
-- **Original 3DGS repo** — auto-detected in common paths or cloned to `~/.ottosplatto/gaussian-splatting`
+- **conda** — manages training environments (`gs_gsplat`, `gs_original`, `gs_2dgs`)
+- **NVIDIA driver + CUDA toolkit** — GPU acceleration for COLMAP and training. System nvcc version must match PyTorch's CUDA version.
+- **gsplat** (recommended) — cloned to `~/.ottosplatto/gsplat`, uses `gs_gsplat` conda env. See `docs/gsplat-setup-prompt.md`.
+- **Original 3DGS repo** — auto-detected in common paths or cloned to `~/.ottosplatto/gaussian-splatting`, uses `gs_original` conda env
 
 ## Key Conventions
 

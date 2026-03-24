@@ -12,12 +12,18 @@ Video → FFmpeg → Frames → COLMAP → Sparse Reconstruction → 3DGS Traini
 
 ## Requirements
 
+### System
 - Linux (x86_64 or aarch64)
-- NVIDIA GPU with CUDA
-- Python 3.11+
+- NVIDIA GPU with CUDA (toolkit version must match PyTorch's CUDA version)
+- Python 3.10+
 - [FFmpeg](https://ffmpeg.org/)
 - [COLMAP](https://colmap.github.io/) (v3.x or v4.x — version differences handled automatically)
-- [Original 3DGS](https://github.com/graphdeco-inria/gaussian-splatting) in a conda environment
+- conda (for managing training environments)
+
+### Training backends (at least one)
+- **gsplat MCMC** (recommended) — `gs_gsplat` conda env. See `docs/gsplat-setup-prompt.md` for setup.
+- **Original 3DGS** — `gs_original` conda env with [gaussian-splatting](https://github.com/graphdeco-inria/gaussian-splatting)
+- **2DGS** — `gs_2dgs` conda env with [2d-gaussian-splatting](https://github.com/hbb1/2d-gaussian-splatting)
 
 ## Quick Start
 

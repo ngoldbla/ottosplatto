@@ -318,18 +318,22 @@ def _train_gsplat(
         }
 
     cmd = [
+        "conda", "run", "-n", conda_env,
         "python", "-u", trainer_script,
         "mcmc",
-        "--data_dir", source_dir,
-        "--data_factor", "1",
-        "--max_steps", str(iterations),
-        "--result_dir", output_dir,
-        "--cap_max", "2000000",
-        "--sh_degree", str(sh_degree),
-        "--ssim_lambda", "0.2",
-        "--opacity_reg", "0.01",
-        "--scale_reg", "0.01",
+        "--data-dir", source_dir,
+        "--data-factor", "1",
+        "--max-steps", str(iterations),
+        "--result-dir", output_dir,
+        "--strategy.cap-max", "2000000",
+        "--sh-degree", str(sh_degree),
+        "--ssim-lambda", "0.2",
+        "--opacity-reg", "0.01",
+        "--scale-reg", "0.01",
         "--antialiased",
+        "--save-ply",
+        "--disable-viewer",
+        "--disable-video",
     ]
 
     if on_output:
@@ -366,8 +370,14 @@ def _train_gsplat(
         if not s:
             continue
 
-        # gsplat progress format: "Step 5000/40000, Loss: 0.0234, PSNR: 28.5, ..."
-        # or tqdm: "|5000/40000|"
+        # GPU stats on a timer independent of progress parsing
+        now = time.monotonic()
+        if now - last_gpu_report >= gpu_report_interval:
+            log_gpu_stats(on_output)
+            last_gpu_report = now
+
+        # gsplat progress format: "loss=0.535| sh degree=0| :  30%|███| 15/50 [...]"
+        # or tqdm: "|5000/40000|"  or  "[ITER 7000]"
         progress = _parse_training_line(s, iterations, last_report_iter, report_every, t_start)
         if progress:
             if on_output:
@@ -375,10 +385,6 @@ def _train_gsplat(
             last_report_iter = progress.get("iter", last_report_iter)
             if progress.get("loss") is not None:
                 loss_history.append((progress["iter"], progress["loss"]))
-            now = time.monotonic()
-            if now - last_gpu_report >= gpu_report_interval:
-                log_gpu_stats(on_output)
-                last_gpu_report = now
         elif on_output and ("error" in s.lower() or "saving" in s.lower() or "psnr" in s.lower()):
             on_output(f"  {s}")
 

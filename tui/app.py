@@ -8,6 +8,8 @@ import sys
 import shutil
 import time
 import glob as glob_module
+import threading
+from collections import deque
 
 from textual.app import App, ComposeResult
 from textual.binding import Binding
@@ -252,6 +254,7 @@ class OttoSplattoApp(App):
         self._device = None
         self._upload_done = False
         self._copyparty_proc: subprocess.Popen | None = None
+        self._log_buffer: deque[str] = deque(maxlen=500)
 
     def compose(self) -> ComposeResult:
         yield Header(show_clock=True)
@@ -424,15 +427,43 @@ class OttoSplattoApp(App):
         if self.project_dir:
             self._load_project(self.project_dir)
 
+        # Flush buffered log messages from worker threads every 0.5s
+        self.set_interval(0.5, self._flush_log_buffer)
+
     # ── helpers ──────────────────────────────────────────────
 
     def _log(self, msg: str) -> None:
+        """Append a log message. Thread-safe: worker threads write to a buffer
+        that the main thread flushes on a 0.5s timer."""
+        if threading.current_thread() is not threading.main_thread():
+            self._log_buffer.append(msg)
+        else:
+            try:
+                self.query_one("#log", RichLog).write(msg)
+            except Exception:
+                pass
+
+    def _flush_log_buffer(self) -> None:
+        """Drain buffered log messages onto the RichLog widget (runs on main thread)."""
         try:
-            self.query_one("#log", RichLog).write(msg)
+            log_widget = self.query_one("#log", RichLog)
         except Exception:
-            pass
+            return
+        # Drain up to 50 lines per tick to avoid stalling the event loop
+        for _ in range(50):
+            try:
+                msg = self._log_buffer.popleft()
+            except IndexError:
+                break
+            log_widget.write(msg)
 
     def _set_status(self, text: str) -> None:
+        if threading.current_thread() is not threading.main_thread():
+            self.call_from_thread(self._set_status_inner, text)
+        else:
+            self._set_status_inner(text)
+
+    def _set_status_inner(self, text: str) -> None:
         try:
             self.query_one("#project-status", Static).update(text)
         except Exception:
