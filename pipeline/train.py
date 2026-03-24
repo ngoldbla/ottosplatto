@@ -66,26 +66,33 @@ def install_trainer(on_output: Optional[Callable] = None) -> Optional[str]:
 
 
 def _parse_training_line(line, total_iters, last_report_iter, report_every, t_start):
-    """Parse 3DGS training output into user-friendly progress messages."""
-    # Match iteration progress: various formats from different 3DGS versions
-    # "Training progress  7000/30000" or "[ITER 7000]"
-    m = re.search(r"(?:Training progress\s+|ITER\s+|\bIteration\s+|step\s+)(\d+)", line, re.IGNORECASE)
+    """Parse 3DGS/2DGS training output into user-friendly progress messages."""
+    cur_iter = None
+
+    # Format 1: tqdm progress bar (2DGS)
+    # "Training progress:  40%|████      | 20/50 [00:01<00:01, 18.01it/s, Loss=0.54587, Points=20764]"
+    m = re.search(r"\|\s*(\d+)/(\d+)\s*\[", line)
     if m:
         cur_iter = int(m.group(1))
+
+    # Format 2: Original 3DGS "[ITER 7000]" or "Iteration 7000"
+    if cur_iter is None:
+        m = re.search(r"(?:ITER\s+|\bIteration\s+|step\s+)(\d+)", line, re.IGNORECASE)
+        if m:
+            cur_iter = int(m.group(1))
+
+    if cur_iter is not None and cur_iter > 0:
         if cur_iter - last_report_iter >= report_every or cur_iter == total_iters:
             pct = cur_iter / total_iters * 100
             elapsed = time.monotonic() - t_start
-            if cur_iter > 0:
-                eta = elapsed / cur_iter * (total_iters - cur_iter)
-                eta_str = f"{eta/60:.1f}min left" if eta > 60 else f"{eta:.0f}s left"
-            else:
-                eta_str = "calculating…"
+            eta = elapsed / cur_iter * (total_iters - cur_iter)
+            eta_str = f"{eta/60:.1f}min left" if eta > 60 else f"{eta:.0f}s left"
 
-            # Extract loss if present
+            # Extract loss (matches "Loss=0.54587" or "loss: 0.023")
             loss_m = re.search(r"(?:loss|Loss)[=:\s]+([0-9.]+)", line)
             loss_str = f"  loss={loss_m.group(1)}" if loss_m else ""
 
-            # Extract point count if present
+            # Extract point count (matches "Points=20764" or "gaussians: 142000")
             pts_m = re.search(r"(?:points?|gaussians?|splats?)[=:\s]+([0-9,]+)", line, re.IGNORECASE)
             pts_str = f"  pts={pts_m.group(1)}" if pts_m else ""
 
