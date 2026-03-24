@@ -1,1 +1,0 @@
-Namespace(sh_degree=3, source_path='/home/dylan/ottosplatto/home/dylan/splats/dino/dino', model_path='home/dylan/splats/dino/dino/output', images='images', resolution=-1, white_background=False, data_device='cuda', eval=False, render_items=['RGB', 'Alpha', 'Normal', 'Depth', 'Edge', 'Curvature'])
