@@ -876,7 +876,8 @@ class OttoSplattoApp(App):
         }
         self._save_config()
         self._set_status(f"Project: {self.project_dir}")
-        self._show_project_info()
+        # Don't call _show_project_info() yet — it hides the welcome panel
+        # which contains the "Done Uploading" button. Show it after upload completes.
 
         # Kill any existing process on port 3210 to avoid conflicts
         try:
@@ -1067,6 +1068,9 @@ class OttoSplattoApp(App):
                 self.query_one("#btn-upload-done", Button).add_class("hidden"),
             )
         )
+
+        # Now safe to switch from welcome panel to project info
+        self._show_project_info()
 
         if final_count > 0:
             # Check for transforms.json (app-provided poses — skip COLMAP)
