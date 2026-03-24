@@ -215,13 +215,19 @@ def import_transforms(
     points3d_path = os.path.join(sparse_dir, "points3D.bin")
 
     if ply_src and os.path.isfile(ply_src):
-        # Copy the PLY and also write a minimal points3D.bin
-        shutil.copy2(ply_src, os.path.join(sparse_dir, "points3D.ply"))
         if on_output:
             size_mb = os.path.getsize(ply_src) / (1024 * 1024)
             on_output(f"  LiDAR point cloud: {size_mb:.1f} MB")
 
-    # Write empty points3D.bin (trainers will initialize from PLY or random)
+        # Convert PLY to the format 3DGS/2DGS expects: x,y,z,nx,ny,nz,red,green,blue
+        _convert_pointcloud_ply(ply_src, os.path.join(sparse_dir, "points3D.ply"), on_output)
+    else:
+        # No point cloud — write a minimal random one so training can initialize
+        if on_output:
+            on_output("  No point cloud provided — generating random initialization")
+        _write_random_pointcloud(os.path.join(sparse_dir, "points3D.ply"), frames)
+
+    # Write empty points3D.bin (trainer reads PLY first, falls back to bin)
     with open(points3d_path, "wb") as f:
         f.write(struct.pack("<Q", 0))  # num_points = 0
 
@@ -273,3 +279,167 @@ def _rotation_matrix_to_quaternion(R: np.ndarray) -> list:
     # Normalize
     norm = np.sqrt(w*w + x*x + y*y + z*z)
     return [w/norm, x/norm, y/norm, z/norm]
+
+
+def _convert_pointcloud_ply(src_ply: str, dst_ply: str, on_output=None):
+    """Convert a LiDAR PLY to the format expected by 3DGS/2DGS trainers.
+
+    Trainers expect: x, y, z, nx, ny, nz, red, green, blue.
+    LiDAR PLYs may be missing normals — we add zero normals if needed.
+    """
+    from plyfile import PlyData, PlyElement
+    try:
+        plydata = PlyData.read(src_ply)
+    except ImportError:
+        # Fallback: manual PLY parsing if plyfile not installed
+        _convert_pointcloud_manual(src_ply, dst_ply, on_output)
+        return
+    except Exception as e:
+        if on_output:
+            on_output(f"  ⚠ Could not read PLY: {e}")
+        _convert_pointcloud_manual(src_ply, dst_ply, on_output)
+        return
+
+    verts = plydata['vertex']
+    n = len(verts)
+
+    x = np.array(verts['x'], dtype=np.float32)
+    y = np.array(verts['y'], dtype=np.float32)
+    z = np.array(verts['z'], dtype=np.float32)
+
+    # Normals — use existing or zeros
+    has_normals = all(p in verts.data.dtype.names for p in ('nx', 'ny', 'nz'))
+    if has_normals:
+        nx = np.array(verts['nx'], dtype=np.float32)
+        ny = np.array(verts['ny'], dtype=np.float32)
+        nz = np.array(verts['nz'], dtype=np.float32)
+    else:
+        nx = ny = nz = np.zeros(n, dtype=np.float32)
+
+    # Colors — use existing or white
+    has_colors = all(p in verts.data.dtype.names for p in ('red', 'green', 'blue'))
+    if has_colors:
+        red = np.array(verts['red'], dtype=np.uint8)
+        green = np.array(verts['green'], dtype=np.uint8)
+        blue = np.array(verts['blue'], dtype=np.uint8)
+    else:
+        red = green = blue = np.full(n, 200, dtype=np.uint8)
+
+    # Write in the expected format
+    dtype = [('x', 'f4'), ('y', 'f4'), ('z', 'f4'),
+             ('nx', 'f4'), ('ny', 'f4'), ('nz', 'f4'),
+             ('red', 'u1'), ('green', 'u1'), ('blue', 'u1')]
+    arr = np.zeros(n, dtype=dtype)
+    arr['x'] = x; arr['y'] = y; arr['z'] = z
+    arr['nx'] = nx; arr['ny'] = ny; arr['nz'] = nz
+    arr['red'] = red; arr['green'] = green; arr['blue'] = blue
+
+    el = PlyElement.describe(arr, 'vertex')
+    PlyData([el], text=False).write(dst_ply)
+    if on_output:
+        on_output(f"  Point cloud: {n} points → {dst_ply}")
+
+
+def _convert_pointcloud_manual(src_ply: str, dst_ply: str, on_output=None):
+    """Fallback PLY conversion without plyfile library."""
+    with open(src_ply, 'rb') as f:
+        header = b''
+        while True:
+            line = f.readline()
+            header += line
+            if line.strip() == b'end_header':
+                break
+        raw = f.read()
+
+    hdr = header.decode('ascii')
+    lines = hdr.strip().split('\n')
+    props = [l.split() for l in lines if l.startswith('property')]
+    n_verts = int([l for l in lines if l.startswith('element vertex')][0].split()[-1])
+
+    # Build property map
+    prop_names = [p[2] for p in props]
+    prop_types = [p[1] for p in props]
+
+    # Calculate stride
+    type_sizes = {'float': 4, 'double': 8, 'uchar': 1, 'int': 4, 'short': 2}
+    stride = sum(type_sizes.get(t, 4) for t in prop_types)
+
+    has_normals = 'nx' in prop_names
+    has_colors = 'red' in prop_names
+
+    # Write new PLY with required format
+    new_header = (
+        "ply\n"
+        "format binary_little_endian 1.0\n"
+        f"element vertex {n_verts}\n"
+        "property float x\nproperty float y\nproperty float z\n"
+        "property float nx\nproperty float ny\nproperty float nz\n"
+        "property uchar red\nproperty uchar green\nproperty uchar blue\n"
+        "end_header\n"
+    )
+
+    import struct as st
+    fmt_map = {'float': '<f', 'double': '<d', 'uchar': '<B', 'int': '<i', 'short': '<h'}
+
+    with open(dst_ply, 'wb') as out:
+        out.write(new_header.encode('ascii'))
+
+        offset = 0
+        for i in range(n_verts):
+            vals = {}
+            pos = offset
+            for pname, ptype in zip(prop_names, prop_types):
+                sz = type_sizes.get(ptype, 4)
+                fmt = fmt_map.get(ptype, '<f')
+                vals[pname] = st.unpack_from(fmt, raw, pos)[0]
+                pos += sz
+            offset += stride
+
+            out.write(st.pack('<f', vals.get('x', 0)))
+            out.write(st.pack('<f', vals.get('y', 0)))
+            out.write(st.pack('<f', vals.get('z', 0)))
+            out.write(st.pack('<f', vals.get('nx', 0) if has_normals else 0))
+            out.write(st.pack('<f', vals.get('ny', 0) if has_normals else 0))
+            out.write(st.pack('<f', vals.get('nz', 0) if has_normals else 0))
+            out.write(st.pack('<B', int(vals.get('red', 200)) if has_colors else 200))
+            out.write(st.pack('<B', int(vals.get('green', 200)) if has_colors else 200))
+            out.write(st.pack('<B', int(vals.get('blue', 200)) if has_colors else 200))
+
+    if on_output:
+        on_output(f"  Point cloud: {n_verts} points → {dst_ply}")
+
+
+def _write_random_pointcloud(dst_ply: str, frames: list):
+    """Generate a minimal random point cloud from camera positions for initialization."""
+    # Extract camera centers from transform matrices
+    centers = []
+    for frame in frames:
+        c2w = np.array(frame["transform_matrix"], dtype=np.float64)
+        if c2w.shape == (3, 4):
+            c2w = np.vstack([c2w, [0, 0, 0, 1]])
+        centers.append(c2w[:3, 3])
+
+    centers = np.array(centers)
+    centroid = centers.mean(axis=0)
+    spread = np.linalg.norm(centers - centroid, axis=1).max()
+
+    # Generate random points around the centroid
+    n = 1000
+    pts = centroid + np.random.randn(n, 3) * spread * 0.5
+
+    header = (
+        "ply\n"
+        "format binary_little_endian 1.0\n"
+        f"element vertex {n}\n"
+        "property float x\nproperty float y\nproperty float z\n"
+        "property float nx\nproperty float ny\nproperty float nz\n"
+        "property uchar red\nproperty uchar green\nproperty uchar blue\n"
+        "end_header\n"
+    )
+
+    with open(dst_ply, 'wb') as f:
+        f.write(header.encode('ascii'))
+        for i in range(n):
+            f.write(struct.pack('<fff', pts[i, 0], pts[i, 1], pts[i, 2]))
+            f.write(struct.pack('<fff', 0.0, 0.0, 0.0))  # normals
+            f.write(struct.pack('<BBB', 200, 200, 200))   # colors
