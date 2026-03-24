@@ -29,7 +29,8 @@ class QRCodeScreen(ModalScreen[None]):
         align: center middle;
     }
     #qr-dialog {
-        width: 60;
+        width: 80%;
+        max-width: 60;
         height: auto;
         max-height: 90%;
         border: thick $success;
@@ -88,8 +89,9 @@ class PathPickerScreen(ModalScreen[str]):
         align: center middle;
     }
     #picker-dialog {
-        width: 70;
-        height: 24;
+        width: 80%;
+        max-width: 70;
+        height: 80%;
         border: thick $primary;
         background: $surface;
         padding: 1 2;
@@ -152,7 +154,9 @@ class OttoSplattoApp(App):
         background: $surface;
     }
     #log-panel {
-        height: 14;
+        height: 1fr;
+        min-height: 8;
+        max-height: 50%;
         dock: bottom;
         border-top: solid $primary;
     }
@@ -170,6 +174,7 @@ class OttoSplattoApp(App):
     }
     TabPane {
         padding: 1 2;
+        overflow-y: auto;
     }
     .form-label {
         margin-top: 1;
@@ -179,7 +184,7 @@ class OttoSplattoApp(App):
         margin-bottom: 1;
     }
     .form-row {
-        height: 3;
+        height: auto;
         align: left middle;
     }
     .form-row Label {
@@ -187,14 +192,14 @@ class OttoSplattoApp(App):
         width: auto;
     }
     .form-row Switch {
-        height: 3;
+        height: auto;
     }
     Button {
         margin-top: 1;
-        min-width: 24;
+        min-width: 16;
     }
     .browse-btn {
-        min-width: 10;
+        min-width: 8;
         margin-top: 0;
         margin-left: 1;
     }
@@ -224,7 +229,8 @@ class OttoSplattoApp(App):
     .help-text {
         color: $text-muted;
         margin-bottom: 1;
-        padding-left: 2;
+        padding: 0 2;
+        max-width: 100%;
     }
     """
 
