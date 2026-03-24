@@ -520,6 +520,20 @@ def launch_viewer(
     if not os.path.isfile(ply_path):
         return {"status": "error", "message": f"PLY not found: {ply_path}"}
 
+    # Kill any existing process on the port
+    try:
+        result = subprocess.run(["lsof", "-ti", f":{port}"], capture_output=True, text=True)
+        if result.stdout.strip():
+            for pid in result.stdout.strip().split():
+                try:
+                    os.kill(int(pid), 9)
+                except (ProcessLookupError, ValueError):
+                    pass
+            import time
+            time.sleep(0.5)
+    except Exception:
+        pass
+
     serve_dir = os.path.dirname(ply_path)
     ply_name = os.path.basename(ply_path)
 

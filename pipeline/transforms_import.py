@@ -183,6 +183,12 @@ def import_transforms(
             if c2w.shape == (3, 4):
                 c2w = np.vstack([c2w, [0, 0, 0, 1]])
 
+            # Convert from OpenGL convention (Y-up, -Z forward) to OpenCV (Y-down, Z-forward)
+            # This is what 3DGS/2DGS do internally when reading transforms.json:
+            #   c2w[:3, 1:3] *= -1  (negate Y and Z columns)
+            c2w[:3, 1] *= -1  # Negate Y column
+            c2w[:3, 2] *= -1  # Negate Z column
+
             # Invert to get world-to-camera
             w2c = np.linalg.inv(c2w)
 
