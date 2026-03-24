@@ -4,56 +4,66 @@
 
 ---
 
-I need to set up a `gs_gsplat` conda environment on my Linux machine for the gsplat gaussian splatting training library. This is for the OttoSplatto project at ~/ottosplatto.
+I need to set up gsplat for the OttoSplatto project at ~/ottosplatto.
 
-### What needs to happen:
+### The problem:
+gsplat's CUDA extensions fail to build because system nvcc is CUDA 12.6 but PyTorch (base env) was built with CUDA 13.0. The fix is to upgrade the system CUDA toolkit to 13.0 so everything matches.
 
-1. Create a conda environment `gs_gsplat` with Python 3.10 (not 3.13 — better CUDA compat)
-2. Install PyTorch with CUDA 12.6 (matching my system nvcc) — NOT CUDA 13.0
-3. Build and install gsplat from source at `~/.ottosplatto/gsplat` (already cloned from https://github.com/nerfstudio-project/gsplat)
-4. Install gsplat's training dependencies: imageio, tyro, viser, lpips, pyyaml
-5. Verify the simple_trainer.py works: `conda run -n gs_gsplat python ~/.ottosplatto/gsplat/examples/simple_trainer.py --help`
-6. Test training on a small dataset at `/home/dylan/splats/dino` (17 images with transforms.json poses)
+### Step 1: Upgrade system CUDA toolkit to 13.0
+```bash
+sudo apt install cuda-toolkit-13-0
+```
+Then update PATH to use nvcc 13:
+```bash
+export CUDA_HOME=/usr/local/cuda-13.0
+export PATH=$CUDA_HOME/bin:$PATH
+```
+Verify: `nvcc --version` should show 13.0.
+
+### Step 2: Create gs_gsplat conda env
+```bash
+conda create -n gs_gsplat python=3.10 -y
+conda run -n gs_gsplat pip install torch torchvision  # should get CUDA 13.0 build
+```
+
+### Step 3: Build gsplat from source
+The repo is already cloned at `~/.ottosplatto/gsplat`
+```bash
+cd ~/.ottosplatto/gsplat
+conda run -n gs_gsplat pip install -e .
+conda run -n gs_gsplat pip install imageio tyro viser lpips pyyaml
+```
+
+### Step 4: Verify
+```bash
+conda run -n gs_gsplat python examples/simple_trainer.py --help
+```
+
+### Step 5: Test training
+```bash
+conda run -n gs_gsplat python examples/simple_trainer.py mcmc \
+  --data_dir /home/dylan/splats/dino \
+  --data_factor 1 --max_steps 1000 --result_dir /tmp/gsplat_test \
+  --sh_degree 3 --antialiased
+```
 
 ### System info:
 - Linux 6.17.0-14-generic (Ubuntu 24.04)
-- NVIDIA GeForce RTX 4090 (24GB VRAM)
+- NVIDIA GeForce RTX 4090 (24GB, Ada Lovelace sm_89)
 - Driver: 580.126.09
-- System CUDA (nvcc): 12.6
+- Current nvcc: 12.6 (needs upgrade to 13.0)
+- PyTorch (base): 2.11.0+cu130
+- gsplat pip: 1.5.3
 - gcc: 13.3.0
-- conda: 26.1.1
-- Architecture: Ada Lovelace, sm_89
+- CUDA 13.0 toolkit is available: `sudo apt install cuda-toolkit-13-0`
 
-### The build error from last attempt:
-```
-RuntimeError: The detected CUDA version (12.6) mismatches the version that was used to compile PyTorch (13.0).
-```
-This happened because the base conda env has PyTorch built with CUDA 13.0 but nvcc is 12.6. The fix is to install PyTorch with CUDA 12.6 in the new env.
-
-### Suggested commands (verify before running):
-```bash
-# Create env with Python 3.10 + PyTorch for CUDA 12.6
-conda create -n gs_gsplat python=3.10 -y
-conda activate gs_gsplat
-pip install torch torchvision --index-url https://download.pytorch.org/whl/cu126
-
-# Build gsplat from source
-cd ~/.ottosplatto/gsplat
-pip install -e .
-
-# Install training dependencies
-pip install imageio tyro viser lpips pyyaml
-
-# Verify
-python examples/simple_trainer.py --help
-```
-
-### After setup, update OttoSplatto:
-- The TUI already has gsplat as the default training method
-- `pipeline/train.py` has `_train_gsplat()` that calls `simple_trainer.py mcmc`
-- Just need to verify it works end-to-end with the dino test dataset
+### After setup, OttoSplatto integration is already done:
+- TUI has gsplat as default training method (⭐ recommended)
+- `pipeline/train.py` has `_train_gsplat()` that calls simple_trainer.py mcmc
+- GPU monitoring reports every 30s during training
+- Just needs the conda env to work end-to-end
 
 ### Context:
-OttoSplatto is an emergency response 3D reconstruction tool. gsplat MCMC is the SOTA training backend — 4x less VRAM, MCMC densification, appearance optimization, bilateral grid color correction, anti-aliasing. This is critical for production quality. See `~/ottosplatto/docs/training-optimization-research.md` for the full research.
+OttoSplatto is an emergency response 3D reconstruction tool for first responders. gsplat MCMC is the SOTA training backend — 4x less VRAM, MCMC densification, appearance optimization, bilateral grid color correction, anti-aliasing. See `~/ottosplatto/docs/training-optimization-research.md`.
 
 ---
