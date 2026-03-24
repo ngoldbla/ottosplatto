@@ -233,9 +233,8 @@ def import_transforms(
             on_output("  No point cloud provided — generating random initialization")
         _write_random_pointcloud(os.path.join(sparse_dir, "points3D.ply"), frames)
 
-    # Write empty points3D.bin (trainer reads PLY first, falls back to bin)
-    with open(points3d_path, "wb") as f:
-        f.write(struct.pack("<Q", 0))  # num_points = 0
+    # Write points3D.bin from the PLY so all trainers (including gsplat) can read it
+    _write_points3d_bin_from_ply(os.path.join(sparse_dir, "points3D.ply"), points3d_path, on_output)
 
     if on_output:
         on_output(f"  ✓ COLMAP files written to {sparse_dir}")
@@ -449,3 +448,45 @@ def _write_random_pointcloud(dst_ply: str, frames: list):
             f.write(struct.pack('<fff', pts[i, 0], pts[i, 1], pts[i, 2]))
             f.write(struct.pack('<fff', 0.0, 0.0, 0.0))  # normals
             f.write(struct.pack('<BBB', 200, 200, 200))   # colors
+
+
+def _write_points3d_bin_from_ply(ply_path: str, bin_path: str, on_output=None):
+    """Convert a points3D.ply into COLMAP's points3D.bin format.
+
+    COLMAP binary format per point:
+        point3D_id (uint64), x y z (double×3), r g b (uint8×3),
+        error (double), track_length (uint64),
+        [image_id (uint32), point2D_idx (uint32)] × track_length
+    """
+    try:
+        from plyfile import PlyData
+        plydata = PlyData.read(ply_path)
+        verts = plydata['vertex']
+        n = len(verts)
+        x = np.array(verts['x'], dtype=np.float64)
+        y = np.array(verts['y'], dtype=np.float64)
+        z = np.array(verts['z'], dtype=np.float64)
+        has_colors = all(p in verts.data.dtype.names for p in ('red', 'green', 'blue'))
+        if has_colors:
+            red = np.array(verts['red'], dtype=np.uint8)
+            green = np.array(verts['green'], dtype=np.uint8)
+            blue = np.array(verts['blue'], dtype=np.uint8)
+        else:
+            red = green = blue = np.full(n, 200, dtype=np.uint8)
+    except Exception:
+        # Fallback: write empty bin if we can't read the PLY
+        with open(bin_path, "wb") as f:
+            f.write(struct.pack("<Q", 0))
+        return
+
+    with open(bin_path, "wb") as f:
+        f.write(struct.pack("<Q", n))
+        for i in range(n):
+            f.write(struct.pack("<Q", i + 1))              # point3D_id
+            f.write(struct.pack("<ddd", x[i], y[i], z[i])) # xyz
+            f.write(struct.pack("<BBB", red[i], green[i], blue[i]))  # rgb
+            f.write(struct.pack("<d", 0.0))                 # error
+            f.write(struct.pack("<Q", 0))                   # track_length = 0
+
+    if on_output:
+        on_output(f"  Wrote {n} points to points3D.bin")
