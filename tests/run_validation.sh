@@ -59,12 +59,13 @@ echo ""
 
 # 7. Check PLY
 echo "7. Checking output"
-PLY="$WORK/rabbit/output/point_cloud/iteration_${ITERS}/point_cloud.ply"
-if [ -f "$PLY" ]; then
+# gsplat saves to output/ply/point_cloud_<step>.ply, original 3DGS to output/point_cloud/iteration_<n>/point_cloud.ply
+PLY=$(find "$WORK/rabbit/output" -name "*.ply" -not -name "*_cleaned*" 2>/dev/null | sort | tail -1)
+if [ -n "$PLY" ] && [ -f "$PLY" ]; then
   SIZE=$(du -h "$PLY" | cut -f1)
   ok "PLY output: $PLY ($SIZE)"
 else
-  fail "no PLY file at $PLY"
+  fail "no PLY file in $WORK/rabbit/output"
 fi
 echo ""
 

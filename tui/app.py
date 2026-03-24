@@ -16,9 +16,10 @@ from textual.binding import Binding
 from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.screen import ModalScreen
 from textual.widgets import (
-    Button, DirectoryTree, Footer, Header, Input, Label, RichLog,
+    Button, Collapsible, DirectoryTree, Footer, Header, Input, Label, RichLog,
     Rule, Select, Static, Switch, TabbedContent, TabPane,
 )
+from textual.containers import Center
 from textual import work
 from rich.text import Text
 
@@ -234,6 +235,42 @@ class OttoSplattoApp(App):
         padding: 0 2;
         max-width: 100%;
     }
+    /* Welcome screen */
+    #welcome-panel {
+        align: center middle;
+        height: auto;
+        padding: 2 4;
+    }
+    #welcome-panel Static {
+        text-align: center;
+        width: 100%;
+    }
+    .welcome-title {
+        text-style: bold;
+        color: $accent;
+        margin-bottom: 1;
+    }
+    .welcome-subtitle {
+        color: $text-muted;
+        margin-bottom: 2;
+    }
+    .welcome-buttons {
+        align: center middle;
+        height: auto;
+        margin-bottom: 2;
+    }
+    .welcome-buttons Button {
+        min-width: 28;
+        margin: 0 1;
+    }
+    /* Project info shown after project is loaded */
+    #project-info {
+        padding: 1 2;
+        height: auto;
+    }
+    #project-info Static {
+        margin-bottom: 1;
+    }
     """
 
     BINDINGS = [
@@ -263,30 +300,39 @@ class OttoSplattoApp(App):
         with TabbedContent():
             # --- Tab 1: Project ---
             with TabPane("Project", id="tab-project"):
-                yield Static(
-                    "Capture Tips for Best Results:\n"
-                    "  Lock exposure before recording (tap & hold for AE/AF Lock)\n"
-                    "  Use main 1x lens — avoid ultra-wide or telephoto\n"
-                    "  Move slowly in a spiral pattern at multiple heights\n"
-                    "  70-80% overlap between frames\n"
-                    "  Minimum: 50 photos (small), 100+ (room), 200+ (building)",
-                    classes="help-text",
-                )
-                yield Label("Project Name", classes="form-label")
-                yield Input(placeholder="my_scene", id="project-name", classes="form-input")
-                yield Label("Input (video file or image directory)", classes="form-label")
-                with Horizontal(classes="path-row"):
-                    yield Input(placeholder="/path/to/video.mp4 or /path/to/images/", id="input-path", classes="form-input")
-                    yield Button("Browse", variant="default", id="btn-browse-input", classes="browse-btn")
-                yield Label("Output Directory", classes="form-label")
-                with Horizontal(classes="path-row"):
-                    yield Input(placeholder="/home/dylan/splats", id="output-dir", classes="form-input")
-                    yield Button("Browse", variant="default", id="btn-browse-output", classes="browse-btn")
-                with Horizontal():
-                    yield Button("Create Project", variant="primary", id="btn-create")
-                    yield Button("Load Existing", variant="default", id="btn-load")
-                    yield Button("Upload from Phone", variant="success", id="btn-upload")
+                # Welcome panel — shown when no project is loaded
+                with Vertical(id="welcome-panel"):
+                    yield Static("OttoSplatto", classes="welcome-title")
+                    yield Static("3D scene reconstruction from phone or drone captures", classes="welcome-subtitle")
+                    with Horizontal(classes="welcome-buttons"):
+                        yield Button("Upload from Phone", variant="success", id="btn-upload")
+                        yield Button("Open Folder", variant="primary", id="btn-open-folder")
+                        yield Button("Load Previous", variant="default", id="btn-load")
                     yield Button("Done Uploading", variant="warning", id="btn-upload-done", classes="hidden")
+                    with Collapsible(title="Capture Tips", collapsed=True):
+                        yield Static(
+                            "Lock exposure before recording (tap & hold for AE/AF Lock)\n"
+                            "Use main 1x lens — avoid ultra-wide or telephoto\n"
+                            "Move slowly in a spiral pattern at multiple heights\n"
+                            "70-80% overlap between frames\n"
+                            "Minimum: 50 photos (small), 100+ (room), 200+ (building)",
+                            classes="help-text",
+                        )
+                    with Collapsible(title="Project Settings", collapsed=True, id="project-settings"):
+                        yield Label("Project Name", classes="form-label")
+                        yield Input(placeholder="auto-generated", id="project-name", classes="form-input")
+                        yield Label("Output Directory", classes="form-label")
+                        with Horizontal(classes="path-row"):
+                            yield Input(value=os.path.expanduser("~/splats"), id="output-dir", classes="form-input")
+                            yield Button("Browse", variant="default", id="btn-browse-output", classes="browse-btn")
+                        yield Label("Input (video file or image directory)", classes="form-label")
+                        with Horizontal(classes="path-row"):
+                            yield Input(placeholder="for Open Folder — path to video or images", id="input-path", classes="form-input")
+                            yield Button("Browse", variant="default", id="btn-browse-input", classes="browse-btn")
+                        yield Button("Create Project", variant="primary", id="btn-create")
+                # Project info — shown after project is loaded (initially hidden)
+                with Vertical(id="project-info", classes="hidden"):
+                    yield Static("", id="project-info-text")
 
             # --- Tab 2: Extract ---
             with TabPane("Extract", id="tab-extract"):
@@ -472,6 +518,59 @@ class OttoSplattoApp(App):
     def _check_cancel(self) -> bool:
         return self._cancel
 
+    def _auto_project_name(self) -> str:
+        """Generate a timestamped project name like scene_20260323_1430."""
+        from datetime import datetime
+        return datetime.now().strftime("scene_%Y%m%d_%H%M")
+
+    def _ensure_project_name(self) -> str:
+        """Return the project name from the Input, or auto-generate one."""
+        name = self.query_one("#project-name", Input).value.strip()
+        if not name:
+            name = self._auto_project_name()
+            try:
+                self.query_one("#project-name", Input).value = name
+            except Exception:
+                pass
+        return name
+
+    def _show_project_info(self) -> None:
+        """Switch from welcome panel to project info display. Thread-safe."""
+        def _do():
+            try:
+                self.query_one("#welcome-panel").add_class("hidden")
+                info = self.query_one("#project-info")
+                info.remove_class("hidden")
+                # Update project info text
+                num_images = len([f for f in os.listdir(os.path.join(self.project_dir, "images"))
+                                  if f.lower().endswith(('.jpg', '.jpeg', '.png'))]) if os.path.isdir(os.path.join(self.project_dir, "images")) else 0
+                steps = self._config.get("steps_completed", [])
+                status_parts = []
+                if steps:
+                    status_parts.append("Steps: " + " → ".join(steps))
+                if num_images:
+                    status_parts.append(f"{num_images} images")
+                info_text = f"[bold]{self._config.get('name', '')}[/] — {self.project_dir}"
+                if status_parts:
+                    info_text += "\n" + " | ".join(status_parts)
+                self.query_one("#project-info-text", Static).update(info_text)
+            except Exception:
+                pass
+        if threading.current_thread() is not threading.main_thread():
+            self.call_from_thread(_do)
+        else:
+            _do()
+
+    def _do_open_folder(self) -> None:
+        """Handle the 'Open Folder' button — auto-create project from selected path."""
+        input_path = self.query_one("#input-path", Input).value.strip()
+        if not input_path or not os.path.exists(input_path):
+            self._log("[red]Select a valid video file or image directory[/]")
+            return
+        # Auto-fill name and trigger project creation
+        self._ensure_project_name()
+        self._do_create_project()
+
     def _switch_tab(self, tab_id: str) -> None:
         """Switch to a tab by ID. Safe to call from worker threads."""
         import threading
@@ -510,14 +609,25 @@ class OttoSplattoApp(App):
         self.project_dir = project_dir
         self._load_config()
         self._set_status(f"Project: {self.project_dir}")
+        self._show_project_info()
         self._log(f"[green]Loaded project:[/] {self.project_dir}")
 
-        # Pre-fill PLY path if training output exists
+        # Pre-fill PLY path if training output exists (check both gsplat and original 3DGS formats)
         plys = sorted(glob_module.glob(
             os.path.join(project_dir, "output", "point_cloud", "iteration_*", "point_cloud.ply")
         ))
+        # gsplat saves to output/ply/point_cloud_<step>.ply
+        plys += sorted(glob_module.glob(
+            os.path.join(project_dir, "output", "ply", "point_cloud_*.ply")
+        ))
+        # Also check for cleaned PLY
+        plys += sorted(glob_module.glob(
+            os.path.join(project_dir, "output", "**", "*_cleaned.ply"), recursive=True
+        ))
         if plys:
-            self._ply_path = plys[-1]
+            # Prefer cleaned > latest original
+            cleaned = [p for p in plys if "_cleaned" in p]
+            self._ply_path = cleaned[-1] if cleaned else plys[-1]
             try:
                 self.query_one("#ply-path", Input).value = self._ply_path
             except Exception:
@@ -614,6 +724,9 @@ class OttoSplattoApp(App):
             self._do_upload_from_phone()
         elif btn == "btn-upload-done":
             self._do_finish_upload()
+        elif btn == "btn-open-folder":
+            self._browse_path("input-path", "Select Input (video or image folder)",
+                              on_selected=self._do_open_folder)
         elif btn == "btn-view":
             self._do_view()
         elif btn == "btn-clean":
@@ -623,7 +736,7 @@ class OttoSplattoApp(App):
         elif btn == "btn-browse-output":
             self._browse_path("output-dir", "Select Output Directory")
 
-    def _browse_path(self, input_id: str, title: str) -> None:
+    def _browse_path(self, input_id: str, title: str, on_selected=None) -> None:
         """Open a directory picker and fill the result into an Input widget."""
         current = self.query_one(f"#{input_id}", Input).value.strip()
         start = current if current and os.path.exists(current) else os.path.expanduser("~")
@@ -631,6 +744,8 @@ class OttoSplattoApp(App):
         def _on_result(path: str) -> None:
             if path:
                 self.query_one(f"#{input_id}", Input).value = path
+                if on_selected:
+                    on_selected()
 
         self.push_screen(PathPickerScreen(start, title), _on_result)
 
@@ -638,13 +753,15 @@ class OttoSplattoApp(App):
 
     @work(thread=True)
     def _do_create_project(self) -> None:
-        name = self.query_one("#project-name", Input).value.strip()
+        name = self._ensure_project_name()
         input_path = self.query_one("#input-path", Input).value.strip()
         output_dir = self.query_one("#output-dir", Input).value.strip()
 
-        if not all([name, input_path, output_dir]):
-            self._log("[red]Fill in all three fields[/]")
+        if not input_path:
+            self._log("[red]Select an input video or image folder[/]")
             return
+        if not output_dir:
+            output_dir = os.path.expanduser("~/splats")
 
         if not os.path.exists(input_path):
             self._log(f"[red]Input not found:[/] {input_path}")
@@ -663,6 +780,7 @@ class OttoSplattoApp(App):
         }
         self._save_config()
         self._set_status(f"Project: {self.project_dir}")
+        self._show_project_info()
         self._log(f"[green]Project created:[/] {self.project_dir}")
         self._log(f"  Input type: {'video' if is_video else 'image directory'}")
 
@@ -712,6 +830,11 @@ class OttoSplattoApp(App):
                     self._log(f"[yellow]⚠ transforms.json import failed: {result.get('message', '')}[/]")
                     self._log("[cyan]Falling back to COLMAP reconstruction[/]")
 
+            # Set train_source to project_dir as default — COLMAP will update
+            # it to the proper path (with sparse/0/) when reconstruction succeeds.
+            self._config["train_source"] = self.project_dir
+            self._save_config()
+
             # Auto-detect camera from EXIF and recommend settings
             from pipeline.exif_detect import detect_camera
             detection = detect_camera(os.path.join(self.project_dir, "images"), on_output=self._log)
@@ -730,33 +853,30 @@ class OttoSplattoApp(App):
             self._log("[cyan]Advancing to Reconstruct tab[/]")
             self._switch_tab("tab-reconstruct")
 
-    @work(thread=True)
     def _do_load_project(self) -> None:
+        """Open a directory picker to find a project, then load it."""
         output_dir = self.query_one("#output-dir", Input).value.strip()
-        name = self.query_one("#project-name", Input).value.strip()
-        if output_dir and name:
-            path = os.path.join(output_dir, name)
-        elif output_dir:
-            path = output_dir
-        else:
-            self._log("[red]Enter an output directory (and optionally a project name)[/]")
-            return
+        start = output_dir if output_dir and os.path.isdir(output_dir) else os.path.expanduser("~/splats")
 
-        if os.path.isfile(os.path.join(path, "project.json")):
-            self._load_project(path)
-        else:
-            self._log(f"[red]No project.json in {path}[/]")
+        def _on_selected(path: str) -> None:
+            if not path:
+                return
+            if os.path.isfile(os.path.join(path, "project.json")):
+                self._load_project(path)
+            else:
+                self._log(f"[red]No project.json in {path}[/]")
+                self._log("  Select a project directory (contains project.json)")
+
+        self.push_screen(PathPickerScreen(start, "Select Project Directory"), _on_selected)
 
     @work(thread=True)
     def _do_upload_from_phone(self) -> None:
         import qrcode
 
-        name = self.query_one("#project-name", Input).value.strip()
+        name = self._ensure_project_name()
         output_dir = self.query_one("#output-dir", Input).value.strip()
-
-        if not name or not output_dir:
-            self._log("[red]Fill in Project Name and Output Directory[/]")
-            return
+        if not output_dir:
+            output_dir = os.path.expanduser("~/splats")
 
         self.project_dir = os.path.join(output_dir, name)
         images_dir = os.path.join(self.project_dir, "images")
@@ -771,6 +891,8 @@ class OttoSplattoApp(App):
         }
         self._save_config()
         self._set_status(f"Project: {self.project_dir}")
+        # Don't call _show_project_info() yet — it hides the welcome panel
+        # which contains the "Done Uploading" button. Show it after upload completes.
 
         # Kill any existing process on port 3210 to avoid conflicts
         try:
@@ -869,35 +991,42 @@ class OttoSplattoApp(App):
             self._copyparty_proc = None
 
         # Sort uploaded files: images → images/, special files → project root
-        # Phone uploads may flatten everything into one directory
+        # Phone uploads may flatten everything into one directory or create
+        # arbitrary subdirs.  We must move ALL files out before cleaning dirs.
         SPECIAL_FILES = {"transforms.json", "pointcloud.ply", "point_cloud.ply"}
+        KEEP_DIRS = {"images", "output", "sparse"}
         project_root = self.project_dir
 
-        # Walk all files in the project dir and sort them
+        # 1) Recursively collect every file NOT already in images/, output/, sparse/
+        files_to_sort: list[tuple[str, str]] = []  # (src_path, filename)
         for root, dirs, files in os.walk(project_root):
-            # Skip .hist (copyparty metadata), output, sparse dirs
-            dirs[:] = [d for d in dirs if d not in {".hist", "output", "sparse"}]
+            rel = os.path.relpath(root, project_root)
+            # Skip walking into the protected dirs entirely
+            dirs[:] = [d for d in dirs if not (
+                rel == "." and d in KEEP_DIRS
+            )]
             for f in files:
-                src = os.path.join(root, f)
-                ext = os.path.splitext(f)[1].lower()
-                fname_lower = f.lower()
+                files_to_sort.append((os.path.join(root, f), f))
 
-                if fname_lower in SPECIAL_FILES:
-                    # Special files go to project root
-                    dst = os.path.join(project_root, f)
-                    if src != dst:
-                        shutil.move(src, dst)
-                        self._log(f"[green]Found {f}[/]")
-                elif ext in IMAGE_EXTS:
-                    # Images go to images/
-                    dst = os.path.join(images_dir, f)
-                    if src != dst and not os.path.exists(dst):
-                        shutil.move(src, dst)
+        # 2) Move files to their proper locations
+        for src, f in files_to_sort:
+            ext = os.path.splitext(f)[1].lower()
+            fname_lower = f.lower()
 
-        # Clean up empty subdirs (except images/, output/, sparse/)
+            if fname_lower in SPECIAL_FILES:
+                dst = os.path.join(project_root, f)
+                if src != dst:
+                    shutil.move(src, dst)
+                    self._log(f"[green]Found {f}[/]")
+            elif ext in IMAGE_EXTS:
+                dst = os.path.join(images_dir, f)
+                if src != dst and not os.path.exists(dst):
+                    shutil.move(src, dst)
+
+        # 3) Clean up any non-standard subdirs (now safe — files already moved)
         for d in os.listdir(project_root):
             dp = os.path.join(project_root, d)
-            if os.path.isdir(dp) and d not in {"images", "output", "sparse", ".hist"}:
+            if os.path.isdir(dp) and d not in KEEP_DIRS:
                 try:
                     shutil.rmtree(dp)
                 except Exception:
@@ -961,6 +1090,9 @@ class OttoSplattoApp(App):
                 self.query_one("#btn-upload-done", Button).add_class("hidden"),
             )
         )
+
+        # Now safe to switch from welcome panel to project info
+        self._show_project_info()
 
         if final_count > 0:
             # Check for transforms.json (app-provided poses — skip COLMAP)
