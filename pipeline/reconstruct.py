@@ -129,13 +129,15 @@ def run_colmap(
         on_output("  Single camera mode — sharing intrinsics across all images")
 
     t0 = time.monotonic()
+    # COLMAP 4.x moved max_image_size from SiftExtraction to FeatureExtraction
+    max_image_prefix = "FeatureExtraction" if version[0] >= 4 else "SiftExtraction"
     extract_cmd = [
         "colmap", "feature_extractor",
         "--database_path", database_path,
         "--image_path", images_dir,
         "--ImageReader.camera_model", camera_model,
         f"--{extract_gpu}", gpu_val,
-        "--SiftExtraction.max_image_size", str(max_image_size),
+        f"--{max_image_prefix}.max_image_size", str(max_image_size),
         "--SiftExtraction.max_num_features", str(max_num_features),
     ]
     if single_camera:
