@@ -169,6 +169,23 @@ def train(
         "--port", "0",  # disable GUI server to avoid port conflicts
     ]
 
+    # Method-specific quality flags
+    if method == "2dgs":
+        cmd.extend([
+            "--lambda_normal", "0.05",       # Surface normal consistency
+            "--lambda_dist", "0.01",         # Depth distortion regularization (reduces floaters)
+            "--depth_ratio", "0",            # Mean depth for unbounded scenes
+        ])
+        if iterations >= 20000:
+            cmd.extend(["--densify_until_iter", str(min(25000, iterations * 3 // 4))])
+    elif method == "original":
+        if iterations >= 20000:
+            # Extend densification window for complex scenes
+            cmd.extend([
+                "--densify_until_iter", str(min(25000, iterations * 3 // 4)),
+                "--densify_grad_threshold", "0.00015",
+            ])
+
     if on_output:
         on_output(f"$ {' '.join(cmd)}")
         on_output(f"Training {iterations} iterations — this will take a few minutes…")
