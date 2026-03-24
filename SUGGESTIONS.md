@@ -1,135 +1,106 @@
 # OttoSplatto — Improvement Roadmap
 
-Prioritized improvements identified after MVP completion. Each item includes rationale, estimated complexity, and implementation notes.
-
-## Tier 1: High Impact, Achievable Now
-
-### 1. Splat Cleanup / Post-Processing ⭐ PRIORITY
-**Status:** ✅ Done (pipeline/cleanup.py)
-**Complexity:** Medium (~150 lines Python)
-
-Vanilla 3DGS produces three types of visual artifacts:
-- **Floaters** — gaussians in empty space from reconstruction noise
-- **Needles** — extremely elongated gaussians (degenerate geometry, scale ratio >10:1)
-- **Peripheral blur** — low-opacity gaussians at scene edges with few observations
-
-**Implementation:** `pipeline/cleanup.py` — post-training filter that reads PLY, removes bad gaussians, writes cleaned PLY:
-- Remove opacity < threshold (default 0.05)
-- Remove needles where max_scale / min_scale > threshold (default 10)
-- Remove outliers far from scene centroid (>N standard deviations)
-- Optional: remove gaussians with very large scale (>99th percentile)
-- Report stats: "Removed 23,400/142,000 gaussians (16%) — 12,100 low-opacity, 8,200 needles, 3,100 outliers"
-
-**References:** Mini-Splatting, LightGaussian pruning approaches
+Prioritized improvements for emergency response 3D reconstruction. Each item includes status, rationale, and implementation notes.
 
 ---
 
-### 2. WASD Camera Controls in Viewer ⭐ PRIORITY
-**Status:** ✅ Done (viewer.py — PointerLockControls + Tab toggle)
-**Complexity:** Low (~50 lines JS)
+## ✅ Completed (Session 2026-03-23)
 
-Current OrbitControls only support mouse-based orbit/zoom/pan. Users expect FPS-style WASD+mouse traversal for walking through scenes.
-
-**Implementation:** Add PointerLockControls (Three.js addon) alongside OrbitControls. Toggle between modes with a key (e.g., Tab or F). WASD moves camera position, mouse rotates view direction. Shift = faster movement, space = up, ctrl = down.
-
-**UX:** Show control mode in the HUD overlay. Default to OrbitControls (familiar), let user switch to FPS mode.
-
----
-
-### 3. Export & Reproducibility Manifest ⭐ PRIORITY
-**Status:** ✅ Done (pipeline/manifest.py + viewer info panel)
-**Complexity:** Low (~80 lines Python + JS)
-
-After training, generate a `manifest.json` alongside the PLY capturing all pipeline settings and results. Enables reproducibility and provenance tracking.
-
-**Manifest fields:**
-- Timestamps (created, training duration)
-- Source info (image count, resolution, camera model detected)
-- COLMAP settings (camera model, matcher, version)
-- Training settings (iterations, SH degree, loss history)
-- Output stats (gaussian count, PLY size, cleanup stats if applied)
-- Device info (GPU model, CUDA version, OttoSplatto version)
-
-**Viewer integration:** "Export" button that downloads PLY + manifest as a zip. "Info" panel showing manifest data.
+| # | Feature | Module |
+|---|---------|--------|
+| 1 | Splat cleanup (floaters, needles, outliers) | pipeline/cleanup.py |
+| 2 | WASD + orbit camera controls in viewer | pipeline/viewer.py |
+| 3 | Export manifest + viewer info panel | pipeline/manifest.py |
+| 4 | Auto camera detection from EXIF | pipeline/exif_detect.py |
+| 5 | Image quality pre-check | pipeline/precheck.py |
+| 6a | 2DGS training method | pipeline/train.py (method="2dgs") |
+| 7 | Training loss curves (sparkline) | pipeline/train.py + tui/app.py |
+| — | Spark.js viewer fix + Wayland workaround | pipeline/viewer.py |
+| — | Copyparty upload + QR code | tui/app.py |
+| — | HEIC auto-conversion | pipeline/convert.py |
+| — | transforms.json import (skip COLMAP) | pipeline/transforms_import.py |
+| — | LiDAR point cloud conversion | pipeline/transforms_import.py |
+| — | COLMAP progress parsing + timing | pipeline/reconstruct.py |
+| — | Training progress bar + ETA | pipeline/train.py |
+| — | TUI help text (camera model, matcher, training) | tui/app.py |
+| — | Capture guidance panel | tui/app.py |
+| — | File/directory browse buttons | tui/app.py |
+| — | QR code full-screen modal | tui/app.py |
+| — | Conda env dropdown | tui/app.py |
+| — | --no-browser CLI flag | main.py |
+| — | Responsive TUI layout | tui/app.py |
 
 ---
 
-## Tier 2: Significant Quality Improvements
+## 🔧 In Progress / Partially Done
 
-### 4. Auto Camera Detection from EXIF
-**Status:** ✅ Done (pipeline/exif_detect.py — auto-fills Reconstruct tab)
-**Complexity:** Low (~60 lines Python)
+### 6b. Scaffold-GS Training Method
+**Status:** Not started (2DGS done, Scaffold-GS next)
+**Complexity:** Medium
 
-Read EXIF from input images to auto-select camera model:
-- iPhone/Android → SIMPLE_RADIAL
-- GoPro/action cam → OPENCV
-- DSLR/mirrorless → PINHOLE
-- Unknown → SIMPLE_RADIAL with warning
+Scaffold-GS uses anchor-based structure that eliminates needles entirely. Better than 2DGS for scenes with fine geometric detail.
 
-Also extract focal length to pre-populate COLMAP intrinsics, improving reconstruction speed and accuracy.
+**Needs:** Check if conda env exists, find/clone repo, add to train.py method routing.
 
 ---
 
-### 5. Image Quality Pre-Check
-**Status:** ✅ Done (pipeline/precheck.py — runs before COLMAP, reports readiness score)
-**Complexity:** Medium (~120 lines Python)
-
-Before COLMAP, scan input images and warn about:
-- Blurry frames (Laplacian variance < threshold)
-- Inconsistent exposure (histogram variance across images)
-- Mixed resolutions (flag mismatched sizes)
-- Missing EXIF (warn about degraded COLMAP performance)
-- Insufficient overlap (too few images, too little coverage)
-
-Display results as a "readiness score" before reconstruction.
-
----
-
-### 6. Better Training Methods (2DGS, Scaffold-GS)
-**Status:** ✅ 2DGS done (train.py method param + TUI selector, conda env gs_2dgs). Scaffold-GS not yet.
-**Complexity:** High (new conda envs + training wrappers)
-
-Vanilla 3DGS (2023) is outdated. Modern alternatives produce better quality:
-- **2D Gaussian Splatting (2DGS)** — better surfaces, fewer floaters
-- **Scaffold-GS** — anchor-based structure, eliminates needles
-- **Mip-Splatting** — anti-aliased, less zoom-dependent blur
-- **GOF (Gaussian Opacity Fields)** — enables mesh extraction
-
-Add a "Method" dropdown in the Train tab. Each method = separate conda env and training script.
-
----
-
-## Tier 3: Polish & Professional Features
-
-### 7. Training Loss Curves in TUI
-**Status:** ✅ Done (ASCII sparkline in log panel after training)
+### 13. Tab Auto-Advance Reliability
+**Status:** Bug fix attempted, needs validation
 **Complexity:** Low
 
-Use Textual's `Sparkline` widget to show loss over time in the log panel. Helps users see if training has converged or needs more iterations.
+`_switch_tab` rewritten to detect thread context and use `call_from_thread` properly. Needs real-world testing across all transitions: Create→Reconstruct, Reconstruct→Train, Train→View, and the transforms.json shortcut (Create→Train).
 
 ---
+
+### 14. TUI Log Copy/Paste Support
+**Status:** Not started
+**Complexity:** Medium
+
+Textual's RichLog widget doesn't support text selection. Options:
+- Add a "Copy Log" button that copies full log to clipboard via `pyperclip`
+- Add a "Save Log" button that writes log to a file
+- Investigate Textual's `TextArea` widget as an alternative (supports selection)
+
+---
+
+### 15. SOTA Training Optimization
+**Status:** Research in progress
+**Complexity:** High
+
+Potential improvements:
+- Exposure compensation flags for auto-exposed smartphone footage
+- Better densification strategies (adaptive density control)
+- Depth-supervised loss when LiDAR depth is available
+- Anti-aliasing (Mip-Splatting / Mip-Gaussian)
+- Learning rate tuning for different scene scales
+
+---
+
+## 📋 Remaining Planned Features
 
 ### 8. Comparison Mode in Viewer
 **Status:** Not started
 **Complexity:** Medium
 
 Side-by-side or slider comparison of:
-- iteration_7000 vs iteration_30000 (convergence)
-- Original vs cleaned (cleanup effectiveness)
-- Different training methods
+- iteration_7000 vs iteration_30000 (convergence check)
+- Original vs cleaned splat (cleanup effectiveness)
+- 3DGS vs 2DGS (method comparison)
+- Before/after post-processing
 
 ---
 
 ### 9. Multi-Method Pipeline
-**Status:** Not started
+**Status:** Partially done (2DGS integrated)
 **Complexity:** High
 
-Integrate with existing `gaussian-splat-pipeline` methods:
-- VicaSplat (COLMAP-free, works on textureless scenes)
-- G3Splat
-- DN-Splatter
+Remaining methods from `~/gaussian-splat-pipeline/methods/`:
+- **VicaSplat** (gs_vicasplat) — COLMAP-free, works on textureless scenes
+- **G3Splat** (gs_g3splat) — another COLMAP-free approach
+- **DN-Splatter** (gs_dn_splatter) — depth-normal supervision
+- **EFA-GS** (gs_efa) — efficient feature-aware splatting
 
-Offer method selection in TUI with pros/cons for each.
+Each needs: find trainer script, verify CLI compatibility, add to method dropdown.
 
 ---
 
@@ -138,20 +109,25 @@ Offer method selection in TUI with pros/cons for each.
 **Complexity:** Medium
 
 - Export to `.splat` format (SuperSplat compatible, ~5x smaller)
-- Export to SPZ format (Spark.js native, ~10-20x smaller)
-- Generate standalone HTML viewer file (PLY embedded, shareable)
+- Export to SPZ format (Spark.js native, ~10-20x smaller via Scaniverse)
+- Generate standalone HTML viewer file (PLY + viewer embedded, shareable)
 - SOGS compression for web delivery
+
+Critical for emergency response: sharing 3D scenes with command centers over limited bandwidth.
 
 ---
 
 ### 11. COLMAP-Free Reconstruction
-**Status:** Not started
+**Status:** Partially done (transforms.json import works)
 **Complexity:** High
 
-For scenes where COLMAP fails (textureless, repetitive patterns):
-- DUSt3R / MASt3R — learned stereo matching
-- VicaSplat — direct image-to-splat without SfM
+Already working: LiDAR apps that export transforms.json + pointcloud.ply bypass COLMAP.
+
+Still needed:
+- **DUSt3R / MASt3R** — learned stereo matching, works with as few as 15 images
+- **VicaSplat** — direct image-to-splat without any SfM
 - Auto-detect COLMAP failure and suggest alternatives
+- Fallback chain: try COLMAP → if fails, try DUSt3R → if fails, try VicaSplat
 
 ---
 
@@ -159,8 +135,46 @@ For scenes where COLMAP fails (textureless, repetitive patterns):
 **Status:** Not started
 **Complexity:** Medium
 
-Persistent monitoring during long operations:
-- GPU utilization, memory, temperature (via nvidia-smi)
-- Disk usage tracking
-- Estimated time remaining for each step
+Real-time monitoring during long operations:
+- GPU utilization, VRAM usage, temperature (nvidia-smi polling)
+- Disk usage tracking (PLY files can be large)
+- Estimated time remaining for each pipeline step
 - Historical run comparisons
+- Alert if GPU temp exceeds threshold
+
+---
+
+### 16. Record3D / LiDAR App UX Polish
+**Status:** Core import done, UX needs work
+**Complexity:** Low-Medium
+
+The transforms.json converter works. Remaining polish:
+- Better auto-detection of capture app (show app name in logs)
+- Validate transforms.json integrity (check all images exist, matrices are valid)
+- Support Record3D's native format (quaternion+translation, not 4x4 matrix)
+- Guide user through Record3D capture in the TUI
+
+---
+
+### 17. Capture Quality Feedback Loop
+**Status:** Pre-check done, live feedback not started
+**Complexity:** High
+
+Move beyond pre-check warnings to active capture guidance:
+- Coverage heatmap showing which areas have sufficient views
+- Real-time overlap estimation from camera poses
+- "You need more images from this angle" guidance
+- Post-reconstruction quality map (where reconstruction is weak)
+
+---
+
+### 18. Mesh Extraction from Gaussians
+**Status:** Not started
+**Complexity:** High
+
+Convert gaussian splats to triangle meshes for:
+- CAD/BIM integration (emergency response planning)
+- 3D printing structural assessments
+- Volumetric measurements (debris volume, structural damage extent)
+
+Methods: Poisson reconstruction from gaussian centers, TSDF fusion, GOF (Gaussian Opacity Fields).
