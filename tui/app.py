@@ -366,10 +366,19 @@ class OttoSplattoApp(App):
                     classes="help-text",
                 )
                 yield Label("Conda Environment", classes="form-label")
-                yield Input(value="gs_original", id="conda-env", classes="form-input")
+                yield Select[str](
+                    [("gs_original (Original 3DGS)", "gs_original"),
+                     ("gs_2dgs (2D Gaussian Splatting)", "gs_2dgs"),
+                     ("gs_nerfstudio (Splatfacto)", "gs_nerfstudio"),
+                     ("gs_dn_splatter (DN-Splatter)", "gs_dn_splatter"),
+                     ("gs_g3splat (G3Splat)", "gs_g3splat"),
+                     ("gs_vicasplat (VicaSplat)", "gs_vicasplat"),
+                     ("gs_efa (EFA-GS)", "gs_efa"),
+                     ("gs_depth (Depth-GS)", "gs_depth")],
+                    value="gs_2dgs", id="conda-env",
+                )
                 yield Static(
-                    "The conda environment with the original 3DGS training code installed.\n"
-                    "Leave as 'gs_original' unless you have a custom setup.",
+                    "Auto-selected based on training method. Override only if needed.",
                     classes="help-text",
                 )
                 yield Button("Start Training", variant="primary", id="btn-train")
@@ -429,19 +438,25 @@ class OttoSplattoApp(App):
 
     def _switch_tab(self, tab_id: str) -> None:
         """Switch to a tab by ID. Safe to call from worker threads."""
-        try:
-            # Use run_worker with thread=False to schedule on the main thread
-            self.call_later(self._apply_tab_switch, tab_id)
-        except Exception:
-            pass
+        import threading
+        def do_switch():
+            try:
+                tc = self.query_one(TabbedContent)
+                tc.active = tab_id
+            except Exception as e:
+                try:
+                    self._log(f"[yellow]Tab switch issue: {e}[/]")
+                except Exception:
+                    pass
 
-    def _apply_tab_switch(self, tab_id: str) -> None:
-        """Actually switch the tab — must run on the main thread."""
-        try:
-            tc = self.query_one(TabbedContent)
-            tc.active = tab_id
-        except Exception as e:
-            self._log(f"[yellow]Tab switch issue: {e}[/]")
+        if threading.current_thread() is threading.main_thread():
+            do_switch()
+        else:
+            try:
+                self.app.call_from_thread(do_switch)
+            except RuntimeError:
+                # Fallback: post a timer-based callback
+                self.set_timer(0.1, do_switch)
 
     def _load_config(self) -> dict:
         cfg_path = os.path.join(self.project_dir, "project.json")
@@ -1024,7 +1039,9 @@ class OttoSplattoApp(App):
         iterations = int(self.query_one("#iterations", Input).value or "30000")
         sh_degree = int(self.query_one("#sh-degree", Input).value or "3")
         method = self.query_one("#train-method", Select).value
-        conda_env = "gs_2dgs" if method == "2dgs" else self.query_one("#conda-env", Input).value.strip() or "gs_original"
+        conda_env = self.query_one("#conda-env", Select).value
+        if method == "2dgs":
+            conda_env = "gs_2dgs"
 
         self._log(f"Training {iterations} iterations (SH {sh_degree}) method='{method}' env='{conda_env}'…")
 
