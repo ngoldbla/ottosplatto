@@ -696,18 +696,21 @@ class OttoSplattoApp(App):
             )
         )
 
-        # Poll loop
-        IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".heic"}
+        # Poll loop — count images recursively (uploads may land in subdirs)
+        IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".heic", ".heif"}
         last_count = 0
         while not self._upload_done:
             time.sleep(2)
             try:
-                files = os.listdir(images_dir)
-                count = sum(
-                    1 for f in files if os.path.splitext(f)[1].lower() in IMAGE_EXTS
-                )
+                count = 0
+                for root, dirs, files in os.walk(images_dir):
+                    # Skip copyparty metadata
+                    dirs[:] = [d for d in dirs if not d.startswith(".")]
+                    count += sum(
+                        1 for f in files if os.path.splitext(f)[1].lower() in IMAGE_EXTS
+                    )
                 if count != last_count:
-                    self._log(f"[cyan]{count} images received…[/]")
+                    self._log(f"[cyan]📸 {count} images received…[/]")
                     last_count = count
             except Exception:
                 pass
