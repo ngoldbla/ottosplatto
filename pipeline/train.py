@@ -66,6 +66,14 @@ def install_trainer(on_output: Optional[Callable] = None) -> Optional[str]:
         on_output(f"  pip install -r {dest}/requirements.txt")
         on_output(f"  pip install {dest}/submodules/diff-gaussian-rasterization")
         on_output(f"  pip install {dest}/submodules/simple-knn")
+        try:
+            from pipeline.device import detect
+            gpu = detect().primary_gpu
+            if gpu and gpu.is_legacy:
+                on_output(f"  NOTE: legacy GPU ({gpu.name}) — compile extensions with")
+                on_output(f"  TORCH_CUDA_ARCH_LIST=\"{gpu.torch_cuda_arch}\" and see docs/legacy-gpu-setup.md")
+        except Exception:
+            pass
 
     return dest
 
@@ -121,6 +129,22 @@ def _parse_training_line(line, total_iters, last_report_iter, report_every, t_st
     return None
 
 
+def _preflight_torch(conda_env, on_output):
+    """Warn (non-fatally) if the env's torch build can't run on this GPU."""
+    if on_output is None:
+        return
+    try:
+        from pipeline.device import detect, check_torch_compat
+        profile = detect()
+        gpu = profile.primary_gpu
+        if gpu is None:
+            return
+        for warning in check_torch_compat(gpu, conda_env):
+            on_output(f"⚠ {warning}")
+    except Exception:
+        pass  # preflight is advisory only — never block training
+
+
 def train(
     source_dir: str,
     output_dir: str,
@@ -131,10 +155,16 @@ def train(
     method: str = "original",
     trainer_path: Optional[str] = None,
     env_override: Optional[dict] = None,
+    train_opts: Optional[dict] = None,
     on_output: Optional[Callable[[str], None]] = None,
     check_cancel: Optional[Callable[[], bool]] = None,
 ) -> dict:
-    """Run Gaussian Splatting training via original 3DGS, 2DGS, or gsplat."""
+    """Run Gaussian Splatting training via original 3DGS, 2DGS, or gsplat.
+
+    train_opts carries device-aware tuning from DeviceProfile.training_defaults():
+    data_device, resolution_scale, cap_max, packed, quality_extras.
+    """
+    train_opts = train_opts or {}
     if method == "gsplat":
         if on_output:
             on_output("⭐ Using gsplat MCMC (best quality — appearance opt, anti-aliasing, 4x less VRAM)")
@@ -144,6 +174,7 @@ def train(
         return _train_gsplat(
             source_dir, output_dir, iterations, sh_degree,
             conda_env, env_override, on_output, check_cancel,
+            train_opts=train_opts,
         )
 
     if method == "2dgs":
@@ -192,6 +223,17 @@ def train(
         "--port", "0",  # disable GUI server to avoid port conflicts
     ]
 
+    # Low-VRAM adaptations from the device profile
+    if train_opts.get("data_device") == "cpu":
+        cmd.extend(["--data_device", "cpu"])
+        if on_output:
+            on_output("Low VRAM: keeping images in system RAM (--data_device cpu)")
+    resolution_scale = int(train_opts.get("resolution_scale", 1))
+    if resolution_scale > 1:
+        cmd.extend(["--resolution", str(resolution_scale)])
+        if on_output:
+            on_output(f"Low VRAM: training at 1/{resolution_scale} image resolution")
+
     # Method-specific quality flags
     if method == "2dgs":
         cmd.extend([
@@ -203,15 +245,19 @@ def train(
             cmd.extend(["--densify_until_iter", str(min(25000, iterations * 3 // 4))])
     elif method == "original":
         if iterations >= 20000:
-            # Extend densification window for complex scenes
+            # Extend densification window for complex scenes; low-VRAM
+            # profiles raise the threshold to grow fewer gaussians
+            densify_threshold = train_opts.get("densify_grad_threshold", 0.00015)
             cmd.extend([
                 "--densify_until_iter", str(min(25000, iterations * 3 // 4)),
-                "--densify_grad_threshold", "0.00015",
+                "--densify_grad_threshold", str(densify_threshold),
             ])
 
     if on_output:
         on_output(f"$ {' '.join(cmd)}")
         on_output(f"Training {iterations} iterations — this will take a few minutes…")
+
+    _preflight_torch(conda_env, on_output)
 
     # Log initial GPU state
     from pipeline.gpu_monitor import log_gpu_stats
@@ -301,8 +347,10 @@ def _train_gsplat(
     env_override: Optional[dict] = None,
     on_output: Optional[Callable[[str], None]] = None,
     check_cancel: Optional[Callable[[], bool]] = None,
+    train_opts: Optional[dict] = None,
 ) -> dict:
     """Train using gsplat's simple_trainer with MCMC strategy."""
+    train_opts = train_opts or {}
     # Find gsplat simple_trainer.py
     trainer_script = None
     for path in SEARCH_PATHS_GSPLAT:
@@ -317,6 +365,8 @@ def _train_gsplat(
             "message": "gsplat trainer not found. Run: git clone https://github.com/nerfstudio-project/gsplat.git ~/.ottosplatto/gsplat",
         }
 
+    cap_max = int(train_opts.get("cap_max", 2_000_000))
+
     cmd = [
         "conda", "run", "-n", conda_env,
         "python", "-u", trainer_script,
@@ -325,7 +375,7 @@ def _train_gsplat(
         "--data-factor", "1",
         "--max-steps", str(iterations),
         "--result-dir", output_dir,
-        "--strategy.cap-max", "2000000",
+        "--strategy.cap-max", str(cap_max),
         "--sh-degree", str(sh_degree),
         "--ssim-lambda", "0.2",
         "--opacity-reg", "0.01",
@@ -336,8 +386,15 @@ def _train_gsplat(
         "--disable-video",
     ]
 
-    # Quality features that need more iterations to converge (>10K steps)
-    if iterations >= 10000:
+    # Packed rasterization: slower but much lower peak VRAM
+    if train_opts.get("packed"):
+        cmd.append("--packed")
+        if on_output:
+            on_output(f"Low VRAM: packed rasterization, max {cap_max:,} gaussians")
+
+    # Quality features that need more iterations to converge (>10K steps).
+    # They add significant VRAM, so low-memory profiles disable them.
+    if iterations >= 10000 and train_opts.get("quality_extras", True):
         cmd.extend([
             # Appearance optimization handles per-image exposure/white-balance variation
             "--app-opt",
@@ -351,6 +408,8 @@ def _train_gsplat(
     if on_output:
         on_output(f"$ {' '.join(cmd)}")
         on_output(f"Training {iterations} steps with gsplat MCMC…")
+
+    _preflight_torch(conda_env, on_output)
 
     from pipeline.gpu_monitor import log_gpu_stats
     log_gpu_stats(on_output)

@@ -2,7 +2,7 @@
 
 Gaussian Splatting pipeline for Linux + NVIDIA GPUs. Orchestrates the full workflow from video to trained 3D Gaussian Splats.
 
-Supports RTX consumer GPUs (4090, 3090, …), DGX Spark (Grace Blackwell), and multi-GPU workstations. Auto-detects hardware and adapts training defaults.
+Supports NVIDIA GPUs from GTX 10-series (Pascal) through RTX 50-series and DGX Spark (Grace Blackwell), including low-VRAM (4–8 GB) cards and multi-GPU workstations. Auto-detects hardware and adapts training defaults.
 
 ## Pipeline
 
@@ -90,10 +90,15 @@ ottosplatto/
 
 | Device | Arch | Detected As | Training Defaults |
 |--------|------|-------------|-------------------|
+| DGX Spark (128 GB) | aarch64 | Blackwell, sm_10.x | 30K iters, SH 4 |
 | RTX 4090 (24 GB) | x86_64 | Ada, sm_8.9 | 30K iters, SH 3 |
 | RTX 3090 (24 GB) | x86_64 | Ampere, sm_8.6 | 30K iters, SH 3 |
-| DGX Spark (128 GB) | aarch64 | Blackwell, sm_10.x | 30K iters, SH 4 |
-| Low-VRAM (<20 GB) | any | auto | 20K iters, SH 2 |
+| RTX 3060 (12 GB) | x86_64 | Ampere, sm_8.6 | 30K iters, SH 3, 1.5M gaussian cap |
+| GTX 1070/1080 (8 GB) | x86_64 | Pascal, sm_6.1 | 30K iters, SH 3, images in RAM, 1M cap, packed |
+| GTX 1060 (6 GB) | x86_64 | Pascal, sm_6.1 | 20K iters, SH 2, half-res, 600K cap |
+| ≤4 GB cards | any | auto | 15K iters, SH 2, quarter-res, 350K cap |
+
+Architectures from Kepler through Blackwell are recognized (GTX 900/10-series, RTX 20/30/40/50-series, Titan, Tesla/datacenter). **Pre-Volta cards (Pascal and older)** need an older PyTorch/CUDA stack — OttoSplatto detects them, defaults to the original 3DGS trainer, and preflight-checks that your torch build has kernels for the card. See [docs/legacy-gpu-setup.md](docs/legacy-gpu-setup.md).
 
 ## Test Rabbit
 

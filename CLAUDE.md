@@ -8,7 +8,7 @@ OttoSplatto is an **orchestrator** — it wraps existing CLI tools via subproces
 
 ```
 main.py                  Entry point: dispatches CLI subcommands or launches TUI
-pipeline/device.py       GPU/arch detection (Ada, Hopper, Blackwell, DGX Spark)
+pipeline/device.py       GPU/arch detection (Kepler→Blackwell, DGX Spark) + VRAM-tiered defaults
 pipeline/extract.py      FFmpeg frame extraction from video
 pipeline/reconstruct.py  COLMAP pipeline (feature extract → match → map → undistort)
 pipeline/train.py        Wraps original 3DGS train.py via conda
@@ -45,7 +45,7 @@ These must be installed on the host before the pipeline will work:
 - COLMAP 4.x renamed SIFT flags (`SiftExtraction.use_gpu` → `FeatureExtraction.use_gpu`). The `reconstruct.py` module detects the version automatically.
 - The `create` command cleans stale data if a project directory already exists at the target path.
 - Training uses `conda run -n gs_original` to invoke the original 3DGS `train.py`. The trainer path is auto-detected from common locations (see `SEARCH_PATHS` in `pipeline/train.py`).
-- Device detection (`pipeline/device.py`) returns a `DeviceProfile` with hardware-aware defaults for training iterations, SH degree, and COLMAP settings.
+- Device detection (`pipeline/device.py`) returns a `DeviceProfile` with hardware-aware defaults for training iterations, SH degree, and COLMAP settings. VRAM tiers scale down for 8/6/4 GB cards (`data_device=cpu`, gsplat `cap_max` + `--packed`, resolution scaling, quality extras off). Legacy architectures (compute cap < 7.0, e.g. Pascal/GTX 10-series) get `recommended_method: "original"` and a torch-kernel preflight check (`check_torch_compat`) before training — see `docs/legacy-gpu-setup.md`.
 
 ## Known Limitations
 

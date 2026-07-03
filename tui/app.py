@@ -466,6 +466,11 @@ class OttoSplattoApp(App):
         try:
             self.query_one("#iterations", Input).value = str(td["iterations"])
             self.query_one("#sh-degree", Input).value = str(td["sh_degree"])
+            recommended = td.get("recommended_method", "gsplat")
+            if recommended != "gsplat":
+                self.query_one("#train-method", Select).value = recommended
+                self._log(f"Legacy GPU detected — training method set to '{recommended}' "
+                          f"(most reliable on this architecture)")
         except Exception:
             pass
 
@@ -1238,10 +1243,14 @@ class OttoSplattoApp(App):
 
         self._log(f"Training {iterations} iterations (SH {sh_degree}) method='{method}' env='{conda_env}'…")
 
+        # Device-aware low-VRAM / legacy-GPU tuning
+        train_opts = self._device.training_defaults() if self._device else {}
+
         result = train(
             source_dir=source, output_dir=output,
             iterations=iterations, sh_degree=sh_degree,
             conda_env=conda_env, method=method,
+            train_opts=train_opts,
             on_output=self._log, check_cancel=self._check_cancel,
         )
 
