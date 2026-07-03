@@ -4,11 +4,43 @@ Gaussian Splatting pipeline for Linux + NVIDIA GPUs. Orchestrates the full workf
 
 Supports NVIDIA GPUs from GTX 10-series (Pascal) through RTX 50-series and DGX Spark (Grace Blackwell), including low-VRAM (4–8 GB) cards and multi-GPU workstations. Auto-detects hardware and adapts training defaults.
 
+![OttoSplatto TUI — Project tab](docs/screenshots/tui-project.png)
+
 ## Pipeline
 
 ```
 Video → FFmpeg → Frames → COLMAP → Sparse Reconstruction → 3DGS Training → PLY Viewer
 ```
+
+## Screenshots
+
+The Textual TUI walks the pipeline left to right as tabs: **Project → Extract → Reconstruct → Train → View**. The log panel below the form streams device detection, tool output, and training progress live.
+
+### Extract — video to frames
+
+FFmpeg frame extraction: pick a sampling rate (2 fps default) and optionally downscale.
+
+![Extract tab](docs/screenshots/tui-extract.png)
+
+### Reconstruct — COLMAP sparse reconstruction
+
+Camera model and matcher selection with inline guidance. EXIF auto-detection pre-fills these; low-VRAM GPUs default to sequential matching.
+
+![Reconstruct tab](docs/screenshots/tui-reconstruct.png)
+
+### Train — Gaussian Splatting
+
+Choose a training backend (gsplat MCMC, 2DGS, or original 3DGS — auto-selected from your GPU architecture), iterations, and SH degree. Defaults come from the detected device profile.
+
+![Train tab](docs/screenshots/tui-train.png)
+
+### View — in-browser splat viewer
+
+Launch the Spark.js viewer on the trained PLY, or clean floaters from the splat.
+
+![View tab](docs/screenshots/tui-view.png)
+
+> Screenshots were captured headlessly on a GPU-less VM, so the device panel reads `GPUs: 0`. On real hardware it lists each card with VRAM, compute capability, and architecture family — e.g. `[0] NVIDIA GeForce GTX 1070 8GB sm_6.1 (pascal)` — plus a legacy-stack warning on pre-Volta cards.
 
 ## Requirements
 
@@ -41,7 +73,7 @@ cd ottosplatto
 python main.py        # or ./run.sh
 ```
 
-Tabbed interface: **Project → Extract → Reconstruct → Train → View**
+Tabbed interface: **Project → Extract → Reconstruct → Train → View** (see [Screenshots](#screenshots))
 
 ### CLI (scriptable)
 
