@@ -98,12 +98,20 @@ def cmd_extract(args):
 
 def cmd_reconstruct(args):
     from pipeline.reconstruct import run_colmap
+    from pipeline.device import detect
+
+    # Device-aware COLMAP settings (low-VRAM GPUs get sequential matching
+    # and smaller feature-extraction image sizes)
+    cd = detect().colmap_defaults()
+    matcher = args.matcher if args.matcher is not None else cd.get("matcher", "exhaustive")
 
     result = run_colmap(
         args.project,
         camera_model=args.camera_model,
         use_gpu=not args.no_gpu,
-        matcher=args.matcher,
+        matcher=matcher,
+        max_image_size=cd.get("max_image_size", 3200),
+        max_num_features=cd.get("max_num_features", 8192),
         undistort=not args.no_undistort,
         on_output=_log,
     )
@@ -139,7 +147,16 @@ def cmd_train(args):
     iterations = args.iterations if args.iterations != 30000 else td.get("iterations", 30000)
     sh_degree = args.sh_degree if args.sh_degree != 3 else td.get("sh_degree", 3)
 
-    method = getattr(args, "method", "gsplat")
+    method = getattr(args, "method", None)
+    if method is None:
+        # e.g. Pascal-era GPUs recommend "original": the 3DGS rasterizer has
+        # the most reliable legacy support. Explicit --method is honored.
+        method = td.get("recommended_method", "gsplat")
+        if method != "gsplat":
+            gpu = profile.primary_gpu
+            _log(f"Detected {gpu.name if gpu else 'GPU'} ({gpu.family if gpu else '?'}) — "
+                 f"using '{method}' trainer (pass --method gsplat to override)")
+
     conda_env = args.conda_env
     if conda_env is None:
         conda_env = {"gsplat": "gs_gsplat", "2dgs": "gs_2dgs", "original": "gs_original"}.get(method, "gs_gsplat")
@@ -149,6 +166,7 @@ def cmd_train(args):
         iterations=iterations, sh_degree=sh_degree,
         conda_env=conda_env, method=method,
         env_override=env_override,
+        train_opts=td,
         on_output=_log,
     )
     if result["status"] != "success":
@@ -284,7 +302,8 @@ def main():
     p = sub.add_parser("reconstruct", help="Run COLMAP reconstruction")
     p.add_argument("--project", required=True)
     p.add_argument("--camera-model", default="SIMPLE_RADIAL")
-    p.add_argument("--matcher", default="exhaustive", choices=["exhaustive", "sequential"])
+    p.add_argument("--matcher", default=None, choices=["exhaustive", "sequential"],
+                   help="Feature matcher (default: auto from GPU VRAM)")
     p.add_argument("--no-gpu", action="store_true")
     p.add_argument("--no-undistort", action="store_true")
 
@@ -293,8 +312,8 @@ def main():
     p.add_argument("--project", required=True)
     p.add_argument("--iterations", type=int, default=30000)
     p.add_argument("--sh-degree", type=int, default=3)
-    p.add_argument("--method", default="gsplat", choices=["gsplat", "original", "2dgs"],
-                   help="Training method (default: gsplat)")
+    p.add_argument("--method", default=None, choices=["gsplat", "original", "2dgs"],
+                   help="Training method (default: auto — gsplat, or original on legacy GPUs)")
     p.add_argument("--conda-env", default=None,
                    help="Override conda env (default: auto from method)")
     p.add_argument("--gpu", type=str, default=None, help="CUDA device index (e.g. 0, 0,1)")
@@ -312,12 +331,12 @@ def main():
     p.add_argument("--output", required=True)
     p.add_argument("--fps", type=int, default=2)
     p.add_argument("--camera-model", default="SIMPLE_RADIAL")
-    p.add_argument("--matcher", default="exhaustive")
+    p.add_argument("--matcher", default=None, choices=["exhaustive", "sequential"])
     p.add_argument("--no-gpu", action="store_true")
     p.add_argument("--no-undistort", action="store_true")
     p.add_argument("--iterations", type=int, default=30000)
     p.add_argument("--sh-degree", type=int, default=3)
-    p.add_argument("--method", default="gsplat", choices=["gsplat", "original", "2dgs"])
+    p.add_argument("--method", default=None, choices=["gsplat", "original", "2dgs"])
     p.add_argument("--conda-env", default=None)
     p.add_argument("--gpu", type=str, default=None)
 
