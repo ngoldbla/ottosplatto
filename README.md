@@ -132,6 +132,8 @@ ottosplatto/
 
 Architectures from Kepler through Blackwell are recognized (GTX 900/10-series, RTX 20/30/40/50-series, Titan, Tesla/datacenter). **Pre-Volta cards (Pascal and older)** need an older PyTorch/CUDA stack — OttoSplatto detects them, defaults to the original 3DGS trainer, and preflight-checks that your torch build has kernels for the card. See [docs/legacy-gpu-setup.md](docs/legacy-gpu-setup.md).
 
+For real-world timings, VRAM budgets, and GPU metrics on tested hardware, see [docs/performance-benchmarks.md](docs/performance-benchmarks.md).
+
 ## Test Rabbit
 
 A built-in synthetic 3D test scene that proves the full pipeline works without needing real video. Generates a textured room (checkerboard floor, patterned walls, scattered objects) rendered from 20 cameras on a circle — a scene that reliably reconstructs in COLMAP and trains in 3DGS.
