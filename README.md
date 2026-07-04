@@ -132,7 +132,7 @@ ottosplatto/
 
 Architectures from Kepler through Blackwell are recognized (GTX 900/10-series, RTX 20/30/40/50-series, Titan, Tesla/datacenter). **Pre-Volta cards (Pascal and older)** need an older PyTorch/CUDA stack — OttoSplatto detects them, defaults to the original 3DGS trainer, and preflight-checks that your torch build has kernels for the card. See [docs/legacy-gpu-setup.md](docs/legacy-gpu-setup.md).
 
-For real-world timings, VRAM budgets, and GPU metrics on tested hardware, see [docs/performance-benchmarks.md](docs/performance-benchmarks.md).
+📊 **Real-world performance benchmarks** for OttoSplatto on a GTX 1070 (Pascal, 8 GB) are available in [docs/performance-benchmarks.md](docs/performance-benchmarks.md) — including per-stage timings, VRAM budgets, and COLMAP CPU scaling.
 
 ## Test Rabbit
 

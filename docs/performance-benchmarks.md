@@ -60,3 +60,30 @@ python main.py train \
   --iterations 10000 \
   --sh-degree 3
 ```
+
+### Reference: COLMAP CPU Timings (pycolmap 4.1)
+
+COLMAP runs on CPU for Pascal cards — timings scale with core count and image resolution:
+
+| Resolution | Images | Features/image | Feature extract | Sequential match | Mapper |
+|:----------:|:------:|:--------------:|:---------------:|:----------------:|:------:|
+| 800×600 | 20 | 12,000 | 2s | 8s | 1s |
+| 800×600 | 20 | 8,000 (max_feat) | 2s | 6s | 1s |
+| 1920×1080 | 20 | 25,000* | ~6s (est.) | ~20s (est.) | ~3s (est.) |
+
+\* Actual feature count depends on image texture content. Synthetic scenes produce more features than real-world footage at the same resolution.
+
+### Notes
+
+- **Pascal legacy stack:** This GTX 1070 requires PyTorch 2.5.1+cu121 (the last torch build with sm_60/sm_61 kernels). See [legacy-gpu-setup.md](legacy-gpu-setup.md) for details.
+- **COLMAP on CPU:** pycolmap's manylinux wheel is built without CUDA. GPU COLMAP would reduce feature extraction to ~0.5s on a modern card.
+- **Synthetic scene limitations:** The test scene's repeated patterns and limited texture cause COLMAP to register only 4 of 20 images. Real-world video footage with more texture and varied viewpoints should register all frames.
+- **gsplat MCMC not tested:** The gsplat MCMC trainer (recommended for Volta+) was not benchmarked on Pascal due to CUDA extension compatibility.
+
+## Contributing Benchmarks
+
+To add results from your hardware:
+
+1. Run the test rabbit: `./tests/run_validation.sh 10000`
+2. Note timings from each stage
+3. Open a PR adding a section to this file with your GPU model, VRAM, and per-stage timings
